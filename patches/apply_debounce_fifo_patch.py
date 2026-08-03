@@ -77,7 +77,7 @@ NEW = '''        state = store.pop(session_key, None)
         return True
 '''
 
-src = open(PATH, encoding="utf-8").read()
+src = open(PATH, encoding="utf-8", newline="").read()
 if MARK in src:
     print("ALREADY_PATCHED"); sys.exit(0)
 if src.count(OLD) != 1:
@@ -85,7 +85,7 @@ if src.count(OLD) != 1:
 
 st = os.stat(PATH)
 shutil.copy2(PATH, PATH + ".bak-pre-debouncefifo")
-open(PATH, "w", encoding="utf-8").write(src.replace(OLD, NEW, 1))
+open(PATH, "w", encoding="utf-8", newline="").write(src.replace(OLD, NEW, 1))
 try:
     py_compile.compile(PATH, doraise=True)
 except py_compile.PyCompileError as e:

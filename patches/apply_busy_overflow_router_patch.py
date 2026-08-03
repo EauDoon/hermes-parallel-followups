@@ -263,7 +263,7 @@ BLOCK = '''    # ---------------------------------------------------------------
 
 '''
 
-src = open(PATH, encoding="utf-8").read()
+src = open(PATH, encoding="utf-8", newline="").read()
 if MARK in src:
     print("ALREADY_PATCHED"); sys.exit(0)
 
@@ -279,7 +279,7 @@ if src.count(ANCHOR) != 1:
 st = os.stat(PATH)
 shutil.copy2(PATH, PATH + ".bak-pre-overflowrouter")
 out = src.replace(HOOK_OLD, HOOK_NEW, 1).replace(ANCHOR, BLOCK + ANCHOR, 1)
-open(PATH, "w", encoding="utf-8").write(out)
+open(PATH, "w", encoding="utf-8", newline="").write(out)
 try:
     py_compile.compile(PATH, doraise=True)
 except py_compile.PyCompileError as e:
