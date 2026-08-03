@@ -107,6 +107,51 @@ async def main():
     merged_any = any("\n" in (e.text or "") for e in [a._pending_messages[KEY]] + overflow)
     chk(not merged_any, "no newline merge anywhere across three bursts")
 
+    print("=== fallback when the runner cannot resolve this adapter ===")
+    # _queue_or_replace_pending_event returns early without queueing when
+    # _adapter_for_source yields nothing. Delegating into that would DROP the
+    # burst, so the patch must fall back to the merge instead.
+    c, c_runner = make_adapter()
+    c_runner._adapter_for_source = lambda source: None
+    await flush(c, KEY, "what is the capital of Mongolia")
+    await flush(c, KEY, "what is the capital of Peru")
+    slot_c = c._pending_messages.get(KEY)
+    chk(slot_c is not None, "unresolvable adapter: burst not dropped")
+    chk(slot_c is not None and "\n" in (slot_c.text or ""),
+        "unresolvable adapter: fell back to merge rather than losing it")
+    chk(not c_runner._queued_events.get(KEY),
+        "unresolvable adapter: nothing half-enqueued")
+
+    print("=== fallback when the FIFO silently declines (pending cap) ===")
+    # _queue_or_replace_pending_event returns WITHOUT queueing and WITHOUT
+    # raising once _BUSY_QUEUE_MAX_PENDING is hit. Treating that as success
+    # would drop the burst, so the flush must notice the queue did not grow.
+    d, d_runner = make_adapter()
+    d_runner._queue_or_replace_pending_event = lambda key, ev: None
+    await flush(d, KEY, "what is the capital of Mongolia")
+    await flush(d, KEY, "what is the capital of Peru")
+    slot_d = d._pending_messages.get(KEY)
+    chk(slot_d is not None, "silent decline: burst not dropped")
+    chk(slot_d is not None and "\n" in (slot_d.text or ""),
+        "silent decline: fell back to merge rather than losing it")
+
+    print("=== media occupant keeps the historical caption merge ===")
+    # _queue_or_replace_pending_event merges text into a photo caption and
+    # does NOT grow the queue. Delegating would look like a decline and merge
+    # a second time, so a media occupant must take the historical path.
+    e, e_runner = make_adapter()
+    photo = Ev("caption-1")
+    photo.message_type = MessageType.PHOTO
+    photo.media_urls = ["a.jpg"]
+    e._pending_messages[KEY] = photo
+    await flush(e, KEY, "what is the capital of Mongolia")
+    chk(not e_runner._queued_events.get(KEY),
+        "media occupant: nothing sent to the FIFO")
+    chk(e._pending_messages[KEY] is photo,
+        "media occupant: slot still holds the photo event")
+    chk((e._pending_messages[KEY].text or "").count("what is the capital") == 1,
+        "media occupant: caption merged exactly once, not duplicated")
+
     print("=== fallback when no runner attached ===")
     b = object.__new__(_Adapter)
     b._text_debounce = {}; b._pending_messages = {}

@@ -47,7 +47,15 @@ Targets `gateway/platforms/base.py`.
 
 Merging inside the debounce window (0.35s rolling, 1.0s hard cap) is preserved, which is correct. A single thought split across two quick taps should stay one turn.
 
-It reaches the runner through the bound `_busy_session_handler` the runner already installs on the adapter, so it needs no wiring changes in `run.py` and stays a single-file patch. If no runner is attached, it falls back to the original merge.
+It reaches the runner through the bound `_busy_session_handler` the runner already installs on the adapter, so it needs no wiring changes in `run.py` and stays a single-file patch.
+
+**Fallback behavior.** `_queue_or_replace_pending_event` can decline *silently* — it returns without queueing and without raising when the source resolves to no adapter, or when the per-session cap (`_BUSY_QUEUE_MAX_PENDING`, 32) is reached. Treating that as success would drop the burst, and the cap was effectively unreachable before this change because the old merge collapsed every follow-up into one slot rather than one entry each. So the flush confirms the queue actually grew and falls back to the historical merge when it did not. Three cases take the historical path:
+
+- **No runner attached** (standalone adapter use, tests)
+- **A media occupant in the pending slot** — it gets caption-merged without growing the queue, which the depth check would misread as a decline and merge a second time
+- **A source resolving to a different adapter** — that adapter owns a different pending slot, and the drain that delivers this burst runs on ours
+
+Merging is lossy; dropping is worse. Every one of these is covered by a test.
 
 **This is the patch most people want. It is useful on its own.**
 
