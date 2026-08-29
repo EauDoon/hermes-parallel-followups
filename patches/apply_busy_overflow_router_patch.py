@@ -282,8 +282,8 @@ out = src.replace(HOOK_OLD, HOOK_NEW, 1).replace(ANCHOR, BLOCK + ANCHOR, 1)
 open(PATH, "w", encoding="utf-8", newline="").write(out)
 try:
     py_compile.compile(PATH, doraise=True)
-except py_compile.PyCompileError as e:
+except (py_compile.PyCompileError, OSError) as e:
     shutil.copy2(PATH + ".bak-pre-overflowrouter", PATH)
-    print("ABORT: syntax error, restored backup:\n", e); sys.exit(3)
+    print("ABORT: compile check failed, restored backup:\n", e); sys.exit(3)
 os.chmod(PATH, st.st_mode & 0o777)
 print("PATCHED_OK")
