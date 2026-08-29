@@ -127,8 +127,8 @@ shutil.copy2(PATH, PATH + ".bak-pre-debouncefifo")
 open(PATH, "w", encoding="utf-8", newline="").write(src.replace(OLD, NEW, 1))
 try:
     py_compile.compile(PATH, doraise=True)
-except py_compile.PyCompileError as e:
+except (py_compile.PyCompileError, OSError) as e:
     shutil.copy2(PATH + ".bak-pre-debouncefifo", PATH)
-    print("ABORT: syntax error, restored backup:\n", e); sys.exit(3)
+    print("ABORT: compile check failed, restored backup:\n", e); sys.exit(3)
 os.chmod(PATH, st.st_mode & 0o777)
 print("PATCHED_OK")
