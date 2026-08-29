@@ -137,6 +137,7 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\b\\d+\\s*(st|nd|rd|th)\\b"
                 r"|\\bas\\s+you\\s+\\w+"
                 r"|\\byou\\s+(said|mentioned|recommended|suggested|are|were|just|gave|wrote)"
+                r"|\\byou\\s+(mean|meant|meaning)\\b"
                 r"|\\b(above|earlier|previous|previously)\\b"
                 r"|\\blast\\s+(one|answer|reply|message|point)\\b"
                 r"|\\b(what|how)\\s+about\\b"
