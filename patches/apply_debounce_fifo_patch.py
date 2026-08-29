@@ -27,7 +27,6 @@ Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 import sys, py_compile, shutil, os
 
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/platforms/base.py"
-MARK = "_queue_or_replace_pending_event"
 
 OLD = """        state = store.pop(session_key, None)
         if state is None:
@@ -118,7 +117,7 @@ NEW = '''        state = store.pop(session_key, None)
 '''
 
 src = open(PATH, encoding="utf-8", newline="").read()
-if MARK in src:
+if NEW in src:
     print("ALREADY_PATCHED"); sys.exit(0)
 if src.count(OLD) != 1:
     print("ABORT: expected exactly 1 flush site, found %d" % src.count(OLD)); sys.exit(2)
