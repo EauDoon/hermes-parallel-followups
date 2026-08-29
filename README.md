@@ -130,7 +130,7 @@ Backups are written next to the originals as `*.bak-pre-debouncefifo` and `*.bak
 ## Tests
 
 ```bash
-python3 tests/test_classifier.py        # 31 labelled classifier cases
+python3 tests/test_classifier.py        # 35 labelled classifier cases
 python3 tests/test_router.py            # 13 router gate cases
 python3 tests/test_debounce_fifo.py     # real _flush_text_debounce_now, run in-container
 python3 tests/test_burst_fullpath.py    # 10-message burst through real handle_message

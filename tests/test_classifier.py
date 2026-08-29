@@ -86,6 +86,10 @@ MUST_Q = [
     "at this moment, how are we planning to use both models?",
     "skip the ones I need to submit manually",
     "why dont we set it to 1m?",
+    "what did you mean by the final recommendation?",
+    "do you mean we should use the other model instead?",
+    "could you explain what you meant by the final recommendation?",
+    "can you clarify what you mean by the proposed architecture?",
 ]
 
 fails = []
