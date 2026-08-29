@@ -22,7 +22,6 @@ Usage: apply_busy_overflow_router_patch.py [/opt/hermes/gateway/run.py]
 import sys, py_compile, shutil, os
 
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/run.py"
-MARK = "_maybe_route_overflow_to_background"
 
 HOOK_OLD = """        effective_mode = self._busy_input_mode
         busy_text_mode = getattr(self, "_busy_text_mode", "interrupt")
@@ -265,7 +264,7 @@ BLOCK = '''    # ---------------------------------------------------------------
 '''
 
 src = open(PATH, encoding="utf-8", newline="").read()
-if MARK in src:
+if BLOCK in src:
     print("ALREADY_PATCHED"); sys.exit(0)
 
 # Preconditions: required module imports must already exist at top level.
