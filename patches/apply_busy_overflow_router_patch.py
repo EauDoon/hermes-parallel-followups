@@ -132,6 +132,8 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\bpoint\\s*\\d"
                 r"|\\bpart\\s*\\d"
                 r"|\\bstep\\s*\\d"
+                r"|\\b(?:option|point|part|step)\\s+(?:one|two|three|four|five|six|seven|eight|nine|ten)\\b"
+                r"|\\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\\s+(?:option|point|part|step)\\b"
                 r"|#\\d"
                 r"|\\b\\d+\\s*(st|nd|rd|th)\\b"
                 r"|\\bas\\s+you\\s+\\w+"

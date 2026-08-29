@@ -69,6 +69,8 @@ MUST_BG = [
 MUST_Q = [
     "do it",
     "tell me more about (2) and (3)",
+    "tell me more about option two",
+    "which second option should we choose",
     "yes let's set it up",
     "leave it, let's see how the job runs",
     "Its not correct",
