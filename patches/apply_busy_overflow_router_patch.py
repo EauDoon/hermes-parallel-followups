@@ -58,6 +58,11 @@ HOOK_NEW = """        effective_mode = self._busy_input_mode
 
 ANCHOR = "    async def _handle_active_session_busy_message(self, event: MessageEvent, session_key: str) -> bool:"
 
+BLOCK_MARKER = """    # ------------------------------------------------------------------
+    # Busy-queue overflow router
+    # ------------------------------------------------------------------
+"""
+
 BLOCK = '''    # ------------------------------------------------------------------
     # Busy-queue overflow router
     # ------------------------------------------------------------------
@@ -134,6 +139,7 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\bstep\\s*\\d"
                 r"|\\b(?:option|point|part|step)\\s+(?:one|two|three|four|five|six|seven|eight|nine|ten)\\b"
                 r"|\\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\\s+(?:option|point|part|step)\\b"
+                r"|\\b(?:the|my|our|your)\\s+(?:code|config|deck|document|draft|file|page|report|sheet|slide)\\b"
                 r"|#\\d"
                 r"|\\b\\d+\\s*(st|nd|rd|th)\\b"
                 r"|\\bas\\s+you\\s+\\w+"
@@ -266,21 +272,46 @@ BLOCK = '''    # ---------------------------------------------------------------
 '''
 
 src = open(PATH, encoding="utf-8", newline="").read()
-if BLOCK in src:
-    print("ALREADY_PATCHED"); sys.exit(0)
 
 # Preconditions: required module imports must already exist at top level.
 for need in ("\nimport re\n", "\nimport os\n", "\nimport time\n", "\nimport asyncio\n"):
     if need not in src:
         print("ABORT: missing top-level import %r" % need.strip()); sys.exit(2)
-if src.count(HOOK_OLD) != 1:
-    print("ABORT: expected exactly 1 hook site, found %d" % src.count(HOOK_OLD)); sys.exit(2)
-if src.count(ANCHOR) != 1:
-    print("ABORT: expected exactly 1 anchor, found %d" % src.count(ANCHOR)); sys.exit(2)
+
+block_count = src.count(BLOCK)
+marker_count = src.count(BLOCK_MARKER)
+hook_new_count = src.count(HOOK_NEW)
+anchor_count = src.count(ANCHOR)
+if block_count:
+    counts = (block_count, hook_new_count, marker_count, anchor_count)
+    if counts != (1, 1, 1, 1):
+        print("ABORT: malformed current install (block=%d, patched_hook=%d, marker=%d, anchor=%d)" % counts); sys.exit(2)
+    if not src.index(BLOCK_MARKER) < src.index(ANCHOR) < src.index(HOOK_NEW):
+        print("ABORT: injected block marker, anchor, and patched hook are out of order"); sys.exit(2)
+    print("ALREADY_PATCHED"); sys.exit(0)
+
+if marker_count:
+    if marker_count != 1:
+        print("ABORT: expected exactly 1 injected block marker, found %d" % marker_count); sys.exit(2)
+    if hook_new_count != 1:
+        print("ABORT: expected exactly 1 patched hook, found %d" % hook_new_count); sys.exit(2)
+    if anchor_count != 1:
+        print("ABORT: expected exactly 1 anchor, found %d" % anchor_count); sys.exit(2)
+    hook_start = src.index(HOOK_NEW)
+    block_start = src.index(BLOCK_MARKER)
+    block_end = src.index(ANCHOR)
+    if not block_start < block_end < hook_start:
+        print("ABORT: injected block marker, anchor, and patched hook are out of order"); sys.exit(2)
+    out = src[:block_start] + BLOCK + src[block_end:]
+else:
+    if src.count(HOOK_OLD) != 1:
+        print("ABORT: expected exactly 1 hook site, found %d" % src.count(HOOK_OLD)); sys.exit(2)
+    if anchor_count != 1:
+        print("ABORT: expected exactly 1 anchor, found %d" % anchor_count); sys.exit(2)
+    out = src.replace(HOOK_OLD, HOOK_NEW, 1).replace(ANCHOR, BLOCK + ANCHOR, 1)
 
 st = os.stat(PATH)
 shutil.copy2(PATH, PATH + ".bak-pre-overflowrouter")
-out = src.replace(HOOK_OLD, HOOK_NEW, 1).replace(ANCHOR, BLOCK + ANCHOR, 1)
 open(PATH, "w", encoding="utf-8", newline="").write(out)
 try:
     py_compile.compile(PATH, doraise=True)

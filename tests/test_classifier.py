@@ -92,6 +92,8 @@ MUST_Q = [
     "do you mean we should use the other model instead?",
     "could you explain what you meant by the final recommendation?",
     "can you clarify what you mean by the proposed architecture?",
+    # A cold agent cannot see an artifact identified only by the conversation.
+    "Can you summarize the report for me?",
 ]
 
 fails = []
