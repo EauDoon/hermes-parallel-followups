@@ -151,6 +151,7 @@ class PatchInstallerTests(unittest.TestCase):
                 target = Path(td) / "target.py"
                 source = unpatched_source(constants, old_name, old_marker)
                 target.write_text(source, encoding="utf-8")
+                target.chmod(0o640)
 
                 command = [sys.executable, str(script), str(target)]
                 environment = {
@@ -164,6 +165,7 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("PATCHED_OK", result.stdout)
                 self.assertNotIn(constants[old_name], target.read_text(encoding="utf-8"))
+                self.assertEqual(target.stat().st_mode & 0o777, 0o640)
                 patched = target.read_bytes()
 
                 result = subprocess.run(
@@ -173,7 +175,34 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertIn("ALREADY_PATCHED", result.stdout)
                 self.assertEqual(target.read_bytes(), patched)
 
-    def test_compile_cache_failure_restores_target(self):
+    def test_symlink_target_fails_closed(self):
+        cases = [
+            ("apply_debounce_fifo_patch.py", "OLD", "_queue_or_replace_pending_event"),
+            ("apply_busy_overflow_router_patch.py", "HOOK_OLD", "_maybe_route_overflow_to_background"),
+        ]
+
+        for script_name, old_name, old_marker in cases:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                script = ROOT / "patches" / script_name
+                constants = string_constants(script)
+                referent = Path(td) / "referent.py"
+                source = unpatched_source(constants, old_name, old_marker)
+                referent.write_text(source, encoding="utf-8")
+                target = Path(td) / "target.py"
+                target.symlink_to(referent)
+
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False, capture_output=True, text=True,
+                )
+
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("regular file", result.stdout)
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(referent.read_text(encoding="utf-8"), source)
+                self.assertFalse(list(Path(td).glob("*.bak-pre-*")))
+
+    def test_compile_failure_preserves_target(self):
         cases = [
             ("apply_debounce_fifo_patch.py", "OLD", "_queue_or_replace_pending_event"),
             ("apply_busy_overflow_router_patch.py", "HOOK_OLD", "_maybe_route_overflow_to_background"),
@@ -184,20 +213,20 @@ class PatchInstallerTests(unittest.TestCase):
                 script = ROOT / "patches" / script_name
                 constants = string_constants(script)
                 target = Path(td) / "target.py"
-                source = unpatched_source(constants, old_name, old_marker)
+                source = unpatched_source(constants, old_name, old_marker) + "\ninvalid syntax !!!\n"
                 target.write_text(source, encoding="utf-8")
-                (Path(td) / "__pycache__").write_text("blocks bytecode directory", encoding="utf-8")
-                environment = dict(os.environ)
-                environment.pop("PYTHONPYCACHEPREFIX", None)
 
                 result = subprocess.run(
                     [sys.executable, str(script), str(target)],
-                    check=False, capture_output=True, text=True, env=environment,
+                    check=False, capture_output=True, text=True,
                 )
 
                 self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
-                self.assertIn("restored backup", result.stdout)
+                self.assertIn("target unchanged", result.stdout)
                 self.assertEqual(target.read_text(encoding="utf-8"), source)
+                self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
+                self.assertFalse(Path(str(target) + ".bak-pre-overflowrouter").exists())
+                self.assertFalse(list(Path(td).glob(".target.py.*.tmp*")))
 
 
 if __name__ == "__main__":

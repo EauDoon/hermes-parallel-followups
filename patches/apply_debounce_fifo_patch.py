@@ -24,9 +24,16 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import sys, py_compile, shutil, os
+import sys, py_compile, shutil, os, stat, tempfile
 
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/platforms/base.py"
+
+try:
+    st = os.lstat(PATH)
+except OSError as e:
+    print("ABORT: target cannot be inspected:\n", e); sys.exit(2)
+if not stat.S_ISREG(st.st_mode):
+    print("ABORT: target must be a regular file (symlinks are not patched)"); sys.exit(2)
 
 OLD = """        state = store.pop(session_key, None)
         if state is None:
@@ -122,13 +129,26 @@ if NEW in src:
 if src.count(OLD) != 1:
     print("ABORT: expected exactly 1 flush site, found %d" % src.count(OLD)); sys.exit(2)
 
-st = os.stat(PATH)
-shutil.copy2(PATH, PATH + ".bak-pre-debouncefifo")
-open(PATH, "w", encoding="utf-8", newline="").write(src.replace(OLD, NEW, 1))
+candidate = bytecode = None
 try:
-    py_compile.compile(PATH, doraise=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", newline="", delete=False,
+        dir=os.path.dirname(os.path.abspath(PATH)), prefix="." + os.path.basename(PATH) + ".", suffix=".tmp",
+    ) as staged:
+        candidate = staged.name
+        staged.write(src.replace(OLD, NEW, 1))
+    os.chmod(candidate, st.st_mode & 0o777)
+    if hasattr(os, "chown"):
+        os.chown(candidate, st.st_uid, st.st_gid)
+    bytecode = candidate + ".pyc"
+    py_compile.compile(candidate, cfile=bytecode, doraise=True)
+    shutil.copy2(PATH, PATH + ".bak-pre-debouncefifo")
+    os.replace(candidate, PATH)
 except (py_compile.PyCompileError, OSError) as e:
-    shutil.copy2(PATH + ".bak-pre-debouncefifo", PATH)
-    print("ABORT: compile check failed, restored backup:\n", e); sys.exit(3)
-os.chmod(PATH, st.st_mode & 0o777)
+    print("ABORT: staged write or compile check failed; target unchanged:\n", e); sys.exit(3)
+finally:
+    for temporary in (candidate, bytecode):
+        if temporary:
+            try: os.unlink(temporary)
+            except FileNotFoundError: pass
 print("PATCHED_OK")
