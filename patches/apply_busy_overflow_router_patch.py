@@ -279,21 +279,36 @@ BLOCK = '''    # ---------------------------------------------------------------
 '''
 
 src = open(PATH, encoding="utf-8", newline="").read()
+if "\r" in src.replace("\r\n", ""):
+    print("ABORT: unsupported carriage-return line endings"); sys.exit(2)
+if "\r\n" in src and "\n" in src.replace("\r\n", ""):
+    print("ABORT: mixed line endings are not supported"); sys.exit(2)
+line_ending = "\r\n" if "\r\n" in src else "\n"
+
+def target_text(value):
+    return value.replace("\n", line_ending)
+
+hook_old = target_text(HOOK_OLD)
+hook_new = target_text(HOOK_NEW)
+block_marker = target_text(BLOCK_MARKER)
+block = target_text(BLOCK)
+anchor = target_text(ANCHOR)
 
 # Preconditions: required module imports must already exist at top level.
-for need in ("\nimport re\n", "\nimport os\n", "\nimport time\n", "\nimport asyncio\n"):
+for name in ("re", "os", "time", "asyncio"):
+    need = line_ending + "import " + name + line_ending
     if need not in src:
-        print("ABORT: missing top-level import %r" % need.strip()); sys.exit(2)
+        print("ABORT: missing top-level import %r" % ("import " + name)); sys.exit(2)
 
-block_count = src.count(BLOCK)
-marker_count = src.count(BLOCK_MARKER)
-hook_new_count = src.count(HOOK_NEW)
-anchor_count = src.count(ANCHOR)
+block_count = src.count(block)
+marker_count = src.count(block_marker)
+hook_new_count = src.count(hook_new)
+anchor_count = src.count(anchor)
 if block_count:
     counts = (block_count, hook_new_count, marker_count, anchor_count)
     if counts != (1, 1, 1, 1):
         print("ABORT: malformed current install (block=%d, patched_hook=%d, marker=%d, anchor=%d)" % counts); sys.exit(2)
-    if not src.index(BLOCK_MARKER) < src.index(ANCHOR) < src.index(HOOK_NEW):
+    if not src.index(block_marker) < src.index(anchor) < src.index(hook_new):
         print("ABORT: injected block marker, anchor, and patched hook are out of order"); sys.exit(2)
     print("ALREADY_PATCHED"); sys.exit(0)
 
@@ -304,18 +319,18 @@ if marker_count:
         print("ABORT: expected exactly 1 patched hook, found %d" % hook_new_count); sys.exit(2)
     if anchor_count != 1:
         print("ABORT: expected exactly 1 anchor, found %d" % anchor_count); sys.exit(2)
-    hook_start = src.index(HOOK_NEW)
-    block_start = src.index(BLOCK_MARKER)
-    block_end = src.index(ANCHOR)
+    hook_start = src.index(hook_new)
+    block_start = src.index(block_marker)
+    block_end = src.index(anchor)
     if not block_start < block_end < hook_start:
         print("ABORT: injected block marker, anchor, and patched hook are out of order"); sys.exit(2)
-    out = src[:block_start] + BLOCK + src[block_end:]
+    out = src[:block_start] + block + src[block_end:]
 else:
-    if src.count(HOOK_OLD) != 1:
-        print("ABORT: expected exactly 1 hook site, found %d" % src.count(HOOK_OLD)); sys.exit(2)
+    if src.count(hook_old) != 1:
+        print("ABORT: expected exactly 1 hook site, found %d" % src.count(hook_old)); sys.exit(2)
     if anchor_count != 1:
         print("ABORT: expected exactly 1 anchor, found %d" % anchor_count); sys.exit(2)
-    out = src.replace(HOOK_OLD, HOOK_NEW, 1).replace(ANCHOR, BLOCK + ANCHOR, 1)
+    out = src.replace(hook_old, hook_new, 1).replace(anchor, block + anchor, 1)
 
 candidate = bytecode = None
 try:

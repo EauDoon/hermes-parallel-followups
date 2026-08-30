@@ -11,6 +11,20 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+INSTALLERS = (
+    (
+        "apply_debounce_fifo_patch.py",
+        "OLD",
+        "_queue_or_replace_pending_event",
+        ".bak-pre-debouncefifo",
+    ),
+    (
+        "apply_busy_overflow_router_patch.py",
+        "HOOK_OLD",
+        "_maybe_route_overflow_to_background",
+        ".bak-pre-overflowrouter",
+    ),
+)
 
 
 def string_constants(script: Path):
@@ -44,6 +58,21 @@ def unpatched_source(constants, old_name, old_marker):
     )
 
 
+def crlf_bytes(text):
+    return text.replace("\n", "\r\n").encode("utf-8")
+
+
+def assert_crlf_only(testcase, value):
+    testcase.assertIn(b"\r\n", value)
+    without_valid_pairs = value.replace(b"\r\n", b"")
+    testcase.assertNotIn(b"\r", without_valid_pairs)
+    testcase.assertNotIn(b"\n", without_valid_pairs)
+
+
+def assert_no_staging_residue(testcase, directory, target):
+    testcase.assertFalse(list(directory.glob(f".{target.name}.*.tmp*")))
+
+
 class PatchInstallerTests(unittest.TestCase):
     def test_current_router_install_rejects_malformed_structure(self):
         script = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
@@ -71,7 +100,9 @@ class PatchInstallerTests(unittest.TestCase):
             for name, malformed in cases.items():
                 with self.subTest(case=name):
                     target = directory / f"{name}.py"
-                    target.write_text(malformed, encoding="utf-8")
+                    original = crlf_bytes(malformed)
+                    assert_crlf_only(self, original)
+                    target.write_bytes(original)
                     result = subprocess.run(
                         [sys.executable, str(script), str(target)],
                         check=False,
@@ -82,8 +113,10 @@ class PatchInstallerTests(unittest.TestCase):
 
                     self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
                     self.assertIn("ABORT", result.stdout)
-                    self.assertEqual(target.read_text(encoding="utf-8"), malformed)
+                    self.assertEqual(target.read_bytes(), original)
+                    assert_crlf_only(self, target.read_bytes())
                     self.assertFalse(Path(str(target) + ".bak-pre-overflowrouter").exists())
+                    assert_no_staging_residue(self, directory, target)
 
     def test_previous_router_install_upgrades_to_current_block(self):
         script = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
@@ -103,14 +136,14 @@ class PatchInstallerTests(unittest.TestCase):
             previous_constants = string_constants(previous_script)
             current_constants = string_constants(script)
             target = directory / "target.py"
-            target.write_text(
-                unpatched_source(
+            target.write_bytes(
+                crlf_bytes(unpatched_source(
                     current_constants,
                     "HOOK_OLD",
                     "_maybe_route_overflow_to_background",
-                ),
-                encoding="utf-8",
+                )),
             )
+            assert_crlf_only(self, target.read_bytes())
             environment = {
                 **os.environ,
                 "PYTHONPYCACHEPREFIX": str(directory / "pycache"),
@@ -122,6 +155,8 @@ class PatchInstallerTests(unittest.TestCase):
                 (script, "ALREADY_PATCHED"),
             ):
                 before = target.read_bytes()
+                backup = Path(str(target) + ".bak-pre-overflowrouter")
+                backup_before = backup.read_bytes() if backup.exists() else None
                 result = subprocess.run(
                     [sys.executable, str(installer), str(target)],
                     check=False,
@@ -131,20 +166,21 @@ class PatchInstallerTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
-                if expected == "ALREADY_PATCHED":
+                if expected == "PATCHED_OK":
+                    self.assertEqual(backup.read_bytes(), before)
+                    assert_crlf_only(self, target.read_bytes())
+                else:
                     self.assertEqual(target.read_bytes(), before)
+                    self.assertEqual(backup.read_bytes(), backup_before)
+                assert_no_staging_residue(self, directory, target)
 
             upgraded = target.read_text(encoding="utf-8")
             self.assertIn(current_constants["BLOCK"], upgraded)
             self.assertNotIn(previous_constants["BLOCK"], upgraded)
+            assert_crlf_only(self, target.read_bytes())
 
     def test_unrelated_marker_mention_does_not_skip_patch(self):
-        cases = [
-            ("apply_debounce_fifo_patch.py", "OLD", "_queue_or_replace_pending_event"),
-            ("apply_busy_overflow_router_patch.py", "HOOK_OLD", "_maybe_route_overflow_to_background"),
-        ]
-
-        for script_name, old_name, old_marker in cases:
+        for script_name, old_name, old_marker, backup_suffix in INSTALLERS:
             with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
                 script = ROOT / "patches" / script_name
                 constants = string_constants(script)
@@ -152,6 +188,7 @@ class PatchInstallerTests(unittest.TestCase):
                 source = unpatched_source(constants, old_name, old_marker)
                 target.write_text(source, encoding="utf-8")
                 target.chmod(0o640)
+                original = target.read_bytes()
 
                 command = [sys.executable, str(script), str(target)]
                 environment = {
@@ -165,7 +202,11 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("PATCHED_OK", result.stdout)
                 self.assertNotIn(constants[old_name], target.read_text(encoding="utf-8"))
-                self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+                backup = Path(str(target) + backup_suffix)
+                self.assertEqual(backup.read_bytes(), original)
+                backup_after_first = backup.read_bytes()
+                if os.name != "nt":
+                    self.assertEqual(target.stat().st_mode & 0o777, 0o640)
                 patched = target.read_bytes()
 
                 result = subprocess.run(
@@ -174,6 +215,92 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("ALREADY_PATCHED", result.stdout)
                 self.assertEqual(target.read_bytes(), patched)
+                self.assertEqual(backup.read_bytes(), backup_after_first)
+
+    def test_crlf_targets_patch_idempotently_without_changing_line_endings(self):
+        for script_name, old_name, old_marker, backup_suffix in INSTALLERS:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                script = ROOT / "patches" / script_name
+                constants = string_constants(script)
+                target = Path(td) / "target.py"
+                source = unpatched_source(constants, old_name, old_marker)
+                original = crlf_bytes(source)
+                assert_crlf_only(self, original)
+                target.write_bytes(original)
+                environment = {
+                    **os.environ,
+                    "PYTHONPYCACHEPREFIX": str(Path(td) / "pycache"),
+                }
+                command = [sys.executable, str(script), str(target)]
+
+                first = subprocess.run(
+                    command, check=False, capture_output=True, text=True, env=environment,
+                )
+                self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+                self.assertIn("PATCHED_OK", first.stdout)
+                patched = target.read_bytes()
+                assert_crlf_only(self, patched)
+                backup = Path(str(target) + backup_suffix)
+                self.assertEqual(backup.read_bytes(), original)
+                backup_after_first = backup.read_bytes()
+                assert_no_staging_residue(self, Path(td), target)
+
+                second = subprocess.run(
+                    command, check=False, capture_output=True, text=True, env=environment,
+                )
+                self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+                self.assertIn("ALREADY_PATCHED", second.stdout)
+                self.assertEqual(target.read_bytes(), patched)
+                self.assertEqual(backup.read_bytes(), backup_after_first)
+                assert_crlf_only(self, target.read_bytes())
+                assert_no_staging_residue(self, Path(td), target)
+
+    def test_invalid_line_endings_fail_closed_without_filesystem_residue(self):
+        for script_name, old_name, old_marker, backup_suffix in INSTALLERS:
+            script = ROOT / "patches" / script_name
+            constants = string_constants(script)
+            source = unpatched_source(constants, old_name, old_marker)
+            valid_crlf = crlf_bytes(source)
+            cases = {
+                "mixed-crlf-lf": (
+                    valid_crlf.replace(b"\r\n", b"\n", 1),
+                    "mixed line endings",
+                ),
+                "lone-cr": (
+                    source.replace("\n", "\r").encode("utf-8"),
+                    "carriage-return",
+                ),
+                "mixed-crlf-cr": (
+                    valid_crlf.replace(b"\r\n", b"\r", 1),
+                    "carriage-return",
+                ),
+                "doubled-crlf": (
+                    valid_crlf.replace(b"\r\n", b"\r\r\n", 1),
+                    "carriage-return",
+                ),
+            }
+
+            for name, (original, expected_message) in cases.items():
+                with self.subTest(script=script_name, case=name), tempfile.TemporaryDirectory() as td:
+                    directory = Path(td)
+                    target = directory / "target.py"
+                    target.write_bytes(original)
+                    result = subprocess.run(
+                        [sys.executable, str(script), str(target)],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env={
+                            **os.environ,
+                            "PYTHONPYCACHEPREFIX": str(directory / "pycache"),
+                        },
+                    )
+
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn(expected_message, result.stdout)
+                    self.assertEqual(target.read_bytes(), original)
+                    self.assertFalse(Path(str(target) + backup_suffix).exists())
+                    assert_no_staging_residue(self, directory, target)
 
     def test_symlink_target_fails_closed(self):
         cases = [
@@ -189,7 +316,12 @@ class PatchInstallerTests(unittest.TestCase):
                 source = unpatched_source(constants, old_name, old_marker)
                 referent.write_text(source, encoding="utf-8")
                 target = Path(td) / "target.py"
-                target.symlink_to(referent)
+                try:
+                    target.symlink_to(referent)
+                except OSError as error:
+                    if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+                        self.skipTest("Windows symlink privilege is unavailable")
+                    raise
 
                 result = subprocess.run(
                     [sys.executable, str(script), str(target)],
