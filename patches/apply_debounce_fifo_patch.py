@@ -158,10 +158,17 @@ if "\r\n" in src and "\n" in src.replace("\r\n", ""):
 line_ending = "\r\n" if "\r\n" in src else "\n"
 old = OLD.replace("\n", line_ending)
 new = NEW.replace("\n", line_ending)
-if new in src:
+old_count = src.count(old)
+new_count = src.count(new)
+if new_count:
+    if (new_count, old_count) != (1, 0):
+        print(
+            "ABORT: malformed current install (patched=%d, unpatched=%d)"
+            % (new_count, old_count)
+        ); sys.exit(2)
     print("ALREADY_PATCHED"); sys.exit(0)
-if src.count(old) != 1:
-    print("ABORT: expected exactly 1 flush site, found %d" % src.count(old)); sys.exit(2)
+if old_count != 1:
+    print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
 
 candidate = bytecode = None
 try:
