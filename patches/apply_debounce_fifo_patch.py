@@ -124,10 +124,17 @@ NEW = '''        state = store.pop(session_key, None)
 '''
 
 src = open(PATH, encoding="utf-8", newline="").read()
-if NEW in src:
+if "\r" in src.replace("\r\n", ""):
+    print("ABORT: unsupported carriage-return line endings"); sys.exit(2)
+if "\r\n" in src and "\n" in src.replace("\r\n", ""):
+    print("ABORT: mixed line endings are not supported"); sys.exit(2)
+line_ending = "\r\n" if "\r\n" in src else "\n"
+old = OLD.replace("\n", line_ending)
+new = NEW.replace("\n", line_ending)
+if new in src:
     print("ALREADY_PATCHED"); sys.exit(0)
-if src.count(OLD) != 1:
-    print("ABORT: expected exactly 1 flush site, found %d" % src.count(OLD)); sys.exit(2)
+if src.count(old) != 1:
+    print("ABORT: expected exactly 1 flush site, found %d" % src.count(old)); sys.exit(2)
 
 candidate = bytecode = None
 try:
@@ -136,7 +143,7 @@ try:
         dir=os.path.dirname(os.path.abspath(PATH)), prefix="." + os.path.basename(PATH) + ".", suffix=".tmp",
     ) as staged:
         candidate = staged.name
-        staged.write(src.replace(OLD, NEW, 1))
+        staged.write(src.replace(old, new, 1))
     os.chmod(candidate, st.st_mode & 0o777)
     if hasattr(os, "chown"):
         os.chown(candidate, st.st_uid, st.st_gid)
