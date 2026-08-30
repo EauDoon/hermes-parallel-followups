@@ -423,6 +423,44 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertFalse(Path(str(target) + ".bak-pre-overflowrouter").exists())
                 self.assertFalse(list(Path(td).glob(".target.py.*.tmp*")))
 
+    def test_current_debounce_install_rejects_malformed_structure(self):
+        script = ROOT / "patches" / "apply_debounce_fifo_patch.py"
+        constants = string_constants(script)
+        unpatched = unpatched_source(
+            constants,
+            "OLD",
+            "_queue_or_replace_pending_event",
+        )
+        patched = unpatched.replace(constants["OLD"], constants["NEW"], 1)
+        cases = {
+            "old-and-new": unpatched + constants["NEW"],
+            "duplicate-new": patched + constants["NEW"],
+        }
+
+        for name, source in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                target = directory / "target.py"
+                target.write_text(source, encoding="utf-8")
+                original = target.read_bytes()
+
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PYTHONPYCACHEPREFIX": str(directory / "pycache"),
+                    },
+                )
+
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("malformed current install", result.stdout)
+                self.assertEqual(target.read_bytes(), original)
+                self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
+                assert_no_staging_residue(self, directory, target)
+
     def test_existing_backup_is_never_overwritten(self):
         cases = [
             (
