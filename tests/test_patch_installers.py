@@ -2,12 +2,15 @@
 """Regression checks for patch-installer idempotency detection."""
 
 import ast
+import contextlib
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -308,6 +311,59 @@ class PatchInstallerTests(unittest.TestCase):
                     self.assertEqual(target.read_bytes(), original)
                     self.assertFalse(Path(str(target) + backup_suffix).exists())
                     assert_no_staging_residue(self, directory, target)
+
+    def test_non_utf8_target_fails_closed_without_filesystem_residue(self):
+        for script_name, _old_name, _old_marker, backup_suffix in INSTALLERS:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                target = directory / "target.py"
+                original = b"# invalid UTF-8 follows\n\xff\n"
+                target.write_bytes(original)
+
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PYTHONPYCACHEPREFIX": str(directory / "pycache"),
+                    },
+                )
+
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.strip(), "ABORT: target must be readable UTF-8")
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(target.read_bytes(), original)
+                self.assertFalse(Path(str(target) + backup_suffix).exists())
+                assert_no_staging_residue(self, directory, target)
+
+    def test_unreadable_target_fails_closed_without_filesystem_residue(self):
+        for script_name, _old_name, _old_marker, backup_suffix in INSTALLERS:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                target = directory / "target.py"
+                original = b"# readable fixture before simulated denial\n"
+                target.write_bytes(original)
+                code = compile(script.read_text(encoding="utf-8"), str(script), "exec")
+                output = io.StringIO()
+
+                with patch(
+                    "sys.argv",
+                    [str(script), str(target)],
+                ), patch(
+                    "builtins.open",
+                    side_effect=PermissionError("simulated read denial"),
+                ), contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                    exec(code, {"__name__": "__main__", "__file__": str(script)})
+
+                self.assertEqual(raised.exception.code, 2)
+                self.assertEqual(output.getvalue().strip(), "ABORT: target must be readable UTF-8")
+                self.assertEqual(target.read_bytes(), original)
+                self.assertFalse(Path(str(target) + backup_suffix).exists())
+                assert_no_staging_residue(self, directory, target)
 
     def test_symlink_target_fails_closed(self):
         cases = [

@@ -301,7 +301,11 @@ BLOCK = '''    # ---------------------------------------------------------------
 
 '''
 
-src = open(PATH, encoding="utf-8", newline="").read()
+try:
+    with open(PATH, encoding="utf-8", newline="") as target:
+        src = target.read()
+except (OSError, UnicodeError):
+    print("ABORT: target must be readable UTF-8"); sys.exit(2)
 if "\r" in src.replace("\r\n", ""):
     print("ABORT: unsupported carriage-return line endings"); sys.exit(2)
 if "\r\n" in src and "\n" in src.replace("\r\n", ""):
