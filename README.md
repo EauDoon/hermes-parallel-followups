@@ -114,7 +114,7 @@ Known residual: "why is it there" still queues on the pronoun `it`. Distinguishi
 
 ## Install
 
-Both patches are standalone scripts. They are idempotent, back up the file they touch, `py_compile` the result, and restore the backup if compilation fails.
+Both patches are standalone scripts. They are idempotent, refuse symlink and non-regular targets, stage and `py_compile` the replacement before touching the live file, then back up and atomically replace the target. A staging or compile failure leaves the target unchanged.
 
 ```bash
 python3 patches/apply_debounce_fifo_patch.py /path/to/hermes/gateway/platforms/base.py
