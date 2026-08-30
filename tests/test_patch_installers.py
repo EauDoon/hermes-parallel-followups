@@ -156,7 +156,9 @@ class PatchInstallerTests(unittest.TestCase):
             ):
                 before = target.read_bytes()
                 backup = Path(str(target) + ".bak-pre-overflowrouter")
+                upgrade_backup = Path(str(backup) + ".upgrade")
                 backup_before = backup.read_bytes() if backup.exists() else None
+                upgrade_before = upgrade_backup.read_bytes() if upgrade_backup.exists() else None
                 result = subprocess.run(
                     [sys.executable, str(installer), str(target)],
                     check=False,
@@ -166,12 +168,17 @@ class PatchInstallerTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(result.stdout.strip(), expected)
-                if expected == "PATCHED_OK":
+                if expected == "PATCHED_OK" and backup_before is None:
                     self.assertEqual(backup.read_bytes(), before)
+                    assert_crlf_only(self, target.read_bytes())
+                elif expected == "PATCHED_OK":
+                    self.assertEqual(backup.read_bytes(), backup_before)
+                    self.assertEqual(upgrade_backup.read_bytes(), before)
                     assert_crlf_only(self, target.read_bytes())
                 else:
                     self.assertEqual(target.read_bytes(), before)
                     self.assertEqual(backup.read_bytes(), backup_before)
+                    self.assertEqual(upgrade_backup.read_bytes(), upgrade_before)
                 assert_no_staging_residue(self, directory, target)
 
             upgraded = target.read_text(encoding="utf-8")
@@ -359,6 +366,89 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
                 self.assertFalse(Path(str(target) + ".bak-pre-overflowrouter").exists())
                 self.assertFalse(list(Path(td).glob(".target.py.*.tmp*")))
+
+    def test_existing_backup_is_never_overwritten(self):
+        cases = [
+            (
+                "apply_debounce_fifo_patch.py",
+                "OLD",
+                "_queue_or_replace_pending_event",
+                ".bak-pre-debouncefifo",
+            ),
+            (
+                "apply_busy_overflow_router_patch.py",
+                "HOOK_OLD",
+                "_maybe_route_overflow_to_background",
+                ".bak-pre-overflowrouter",
+            ),
+        ]
+
+        for script_name, old_name, old_marker, backup_suffix in cases:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                constants = string_constants(script)
+                target = directory / "target.py"
+                source = unpatched_source(constants, old_name, old_marker)
+                target.write_text(source, encoding="utf-8")
+                backup = Path(str(target) + backup_suffix)
+                previous_backup = b"operator-owned recovery copy\n"
+                backup.write_bytes(previous_backup)
+
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PYTHONPYCACHEPREFIX": str(directory / "pycache"),
+                    },
+                )
+
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertIn("target unchanged", result.stdout)
+                self.assertEqual(target.read_text(encoding="utf-8"), source)
+                self.assertEqual(backup.read_bytes(), previous_backup)
+                assert_no_staging_residue(self, directory, target)
+
+    def test_existing_backup_symlink_is_never_followed(self):
+        for script_name, old_name, old_marker, backup_suffix in INSTALLERS:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                constants = string_constants(script)
+                target = directory / "target.py"
+                source = unpatched_source(constants, old_name, old_marker)
+                target.write_text(source, encoding="utf-8")
+                recovery = directory / "operator-recovery.txt"
+                recovery_bytes = b"operator-owned recovery copy\n"
+                recovery.write_bytes(recovery_bytes)
+                backup = Path(str(target) + backup_suffix)
+                try:
+                    backup.symlink_to(recovery)
+                except OSError as error:
+                    if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+                        self.skipTest("Windows symlink privilege is unavailable")
+                    raise
+
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PYTHONPYCACHEPREFIX": str(directory / "pycache"),
+                    },
+                )
+
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertIn("target unchanged", result.stdout)
+                self.assertEqual(target.read_text(encoding="utf-8"), source)
+                self.assertTrue(backup.is_symlink())
+                self.assertEqual(recovery.read_bytes(), recovery_bytes)
+                assert_no_staging_residue(self, directory, target)
 
 
 if __name__ == "__main__":

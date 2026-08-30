@@ -24,9 +24,32 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import sys, py_compile, shutil, os, stat, tempfile
+import sys, py_compile, os, stat, tempfile
 
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/platforms/base.py"
+
+
+def write_backup_exclusive(path, contents, mode):
+    """Create a recovery copy without following or replacing an existing path."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor = os.open(path, flags, mode & 0o777)
+    try:
+        with os.fdopen(descriptor, "wb") as backup:
+            descriptor = -1
+            backup.write(contents)
+            backup.flush()
+            if hasattr(os, "fchmod"):
+                os.fchmod(backup.fileno(), mode & 0o777)
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        raise
 
 try:
     st = os.lstat(PATH)
@@ -149,7 +172,11 @@ try:
         os.chown(candidate, st.st_uid, st.st_gid)
     bytecode = candidate + ".pyc"
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
-    shutil.copy2(PATH, PATH + ".bak-pre-debouncefifo")
+    write_backup_exclusive(
+        PATH + ".bak-pre-debouncefifo",
+        src.encode("utf-8"),
+        st.st_mode,
+    )
     os.replace(candidate, PATH)
 except (py_compile.PyCompileError, OSError) as e:
     print("ABORT: staged write or compile check failed; target unchanged:\n", e); sys.exit(3)
