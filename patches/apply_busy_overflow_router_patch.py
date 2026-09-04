@@ -19,7 +19,7 @@ Gated by display.busy_overflow_background:
 Idempotent, backed up, syntax-checked.
 Usage: apply_busy_overflow_router_patch.py [/opt/hermes/gateway/run.py]
 """
-import sys, py_compile, os, stat, tempfile
+import sys, py_compile, os, stat, tempfile, secrets
 
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/run.py"
 
@@ -272,7 +272,12 @@ BLOCK = '''    # ---------------------------------------------------------------
         if mode == "independent" and not self._classify_busy_followup(text):
             return False
 
-        task_id = "bg_ovr_%d_%s" % (int(time.time()), os.urandom(3).hex())
+        # 8 hex chars = 32 bits of entropy. At a busy gateway emitting 5000
+        # backgrounded overflow tasks per second, the per-second birthday
+        # bound is ~2^16, well above the throughput the patch can produce.
+        # The previous os.urandom(3).hex() had only 24 bits and would have
+        # collided at the same throughput.
+        task_id = "bg_ovr_%d_%s" % (int(time.time()), secrets.token_hex(4))
         anchor = self._reply_anchor_for_event(event)
         task = asyncio.create_task(
             self._run_background_task(
