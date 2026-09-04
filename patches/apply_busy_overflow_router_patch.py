@@ -327,6 +327,18 @@ for name in ("re", "os", "time", "asyncio"):
     if need not in src:
         print("ABORT: missing top-level import %r" % ("import " + name)); sys.exit(2)
 
+# Preconditions: gateway runtime config loader and cfg_get must be reachable as
+# top-level names in the target file. Without this, the patched method calls
+# NameError, which the surrounding `except Exception: return "off"` swallows,
+# silently disabling the router instead of reporting a hard install failure.
+import re as _re
+for required in ("_load_gateway_runtime_config", "cfg_get"):
+    pattern_defined = _re.compile(rf"^def {required}\b", _re.MULTILINE)
+    pattern_from_import = _re.compile(rf"^from\s+\S+\s+import\s+[^\n]*\b{required}\b", _re.MULTILINE)
+    pattern_plain_import = _re.compile(rf"^import\s+{required}\b", _re.MULTILINE)
+    if not (pattern_defined.search(src) or pattern_from_import.search(src) or pattern_plain_import.search(src)):
+        print("ABORT: gateway runtime symbol %r is not defined or imported at top level" % required); sys.exit(2)
+
 block_count = src.count(block)
 marker_count = src.count(block_marker)
 hook_new_count = src.count(hook_new)
