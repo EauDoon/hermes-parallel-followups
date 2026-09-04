@@ -52,7 +52,7 @@ def unpatched_source(constants, old_name, old_marker):
         )
     # In gateway/run.py the busy-handler anchor precedes the later queue-mode hook.
     return (
-        "# fixture\nimport re\nimport os\nimport time\nimport asyncio\n\n"
+        "# fixture\nimport re\nimport os\nimport time\nimport asyncio\nfrom hermes_cli.config import _load_gateway_runtime_config, cfg_get\n\n"
         f"# {old_marker} is described in the release notes\n"
         "class Fixture:\n"
         + constants["ANCHOR"]
@@ -543,6 +543,30 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertTrue(backup.is_symlink())
                 self.assertEqual(recovery.read_bytes(), recovery_bytes)
                 assert_no_staging_residue(self, directory, target)
+
+    def test_router_patch_aborts_when_gateway_runtime_symbols_are_missing(self):
+        # Regression: if a Hermes build lacks _load_gateway_runtime_config or
+        # cfg_get, the patched method raises NameError at first call and the
+        # broad `except Exception: return "off"` silently disables the router.
+        # The installer must abort loudly so the operator notices.
+        script = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
+        constants = string_constants(script)
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td)
+            target = directory / "target.py"
+            target.write_text(unpatched_source(constants, "HOOK_OLD", "_maybe_route_overflow_to_background"), encoding="utf-8")
+            stripped = target.read_text(encoding="utf-8").replace(
+                "from hermes_cli.config import _load_gateway_runtime_config, cfg_get\n", "", 1
+            )
+            target.write_text(stripped, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(script), str(target)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("ABORT: gateway runtime symbol", result.stdout)
 
 
 if __name__ == "__main__":
