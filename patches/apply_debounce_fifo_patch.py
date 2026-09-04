@@ -105,10 +105,13 @@ NEW = '''        state = store.pop(session_key, None)
         # below would misread as a decline and merge a second time. Keep the
         # historical path for that case; it is what the FIFO would do anyway.
         _slot = self._pending_messages.get(session_key)
-        _slot_is_media = _slot is not None and (
-            getattr(_slot, "message_type", None) == MessageType.PHOTO
-            or bool(getattr(_slot, "media_urls", None))
-        )
+        # Any message type that is treated as a media occupant. The previous
+        # code only checked MessageType.PHOTO, which left VIDEO / VOICE /
+        # AUDIO / DOCUMENT / STICKER messages with empty media_urls on the
+        # historical merge path and double-merged their text bursts. getattr
+        # with a default keeps the patch forward-compatible with Hermeses
+        # that do not yet define the newer members.
+        _slot_is_media = _slot is not None and (getattr(_slot, "message_type", None) in (getattr(MessageType, "PHOTO", None), getattr(MessageType, "VIDEO", None), getattr(MessageType, "AUDIO", None), getattr(MessageType, "DOCUMENT", None), getattr(MessageType, "VOICE", None), getattr(MessageType, "STICKER", None), getattr(MessageType, "ANIMATION", None), getattr(MessageType, "VIDEO_NOTE", None)) or bool(getattr(_slot, "media_urls", None)))
         _target = None
         if callable(_resolve) and not _slot_is_media:
             try:
