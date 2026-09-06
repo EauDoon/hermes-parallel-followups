@@ -38,7 +38,7 @@ def string_constants(script: Path):
         if isinstance(node, ast.Assign)
         and len(node.targets) == 1
         and isinstance((target := node.targets[0]), ast.Name)
-        and isinstance(node.value, (ast.Constant, ast.Str))
+        and isinstance(node.value, ast.Constant)
     }
 
 
