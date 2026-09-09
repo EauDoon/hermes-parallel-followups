@@ -12,19 +12,19 @@ Optionally scan your OWN transcript to see how the split falls on real traffic:
 
 Nothing is uploaded or written; the scan is read-only and prints counts only.
 """
-import ast, re, sys, os
+import ast, re, sys, os, argparse
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PATCH = os.path.join(HERE, os.pardir, "patches",
                              "apply_busy_overflow_router_patch.py")
 
-args = [a for a in sys.argv[1:]]
-db_path = None
-if "--db" in args:
-    i = args.index("--db")
-    db_path = args[i + 1]
-    del args[i:i + 2]
-patch_path = args[0] if args else DEFAULT_PATCH
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("patch", nargs="?", default=DEFAULT_PATCH)
+parser.add_argument("--db", help="read-only SQLite transcript; prints aggregate counts only")
+args = parser.parse_args()
+db_path = args.db
+patch_path = args.patch
 
 tree = ast.parse(open(patch_path, encoding="utf-8").read())
 block = None
@@ -121,15 +121,26 @@ else:
 # --- optional: scan your own transcript ------------------------------------
 if db_path:
     import sqlite3
-    c = sqlite3.connect(db_path)
-    rows = [r[0].strip() for r in
-            c.execute("select content from messages where role=?", ("user",))
-            if isinstance(r[0], str) and r[0].strip()]
-    ind = sum(1 for m in rows if classify(m))
-    n = len(rows) or 1
-    print("\n=== YOUR TRANSCRIPT: n=%d ===" % len(rows))
-    print("  -> background (independent): %d (%.1f%%)" % (ind, 100 * ind / n))
-    print("  -> stay queued (dependent) : %d (%.1f%%)" % (n - ind, 100 * (n - ind) / n))
+    from contextlib import closing
+    n = ind = 0
+    try:
+        # URI escaping handles spaces, # and ? without changing the path.
+        # mode=ro refuses missing files instead of creating an empty database.
+        uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True)) as connection:
+            connection.execute("PRAGMA query_only=ON")
+            for (content,) in connection.execute(
+                    "select content from messages where role=?", ("user",)):
+                if isinstance(content, str) and content.strip():
+                    n += 1
+                    ind += bool(classify(content))
+    except (OSError, sqlite3.Error):
+        print("ERROR: cannot read a transcript with messages(role, content); no data was modified")
+        sys.exit(2)
+    denominator = n or 1
+    print("\n=== YOUR TRANSCRIPT: n=%d ===" % n)
+    print("  -> background (independent): %d (%.1f%%)" % (ind, 100 * ind / denominator))
+    print("  -> stay queued (dependent) : %d (%.1f%%)" % (n - ind, 100 * (n - ind) / denominator))
     print("  (counts only; no message content is printed or stored)")
 
 sys.exit(1 if fails else 0)
