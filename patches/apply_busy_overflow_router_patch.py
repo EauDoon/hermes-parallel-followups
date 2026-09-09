@@ -245,6 +245,29 @@ BLOCK = '''    # ---------------------------------------------------------------
             return 0
         return raw if 0 <= raw <= maximum else 0
 
+    async def _run_overflow_background(self, adapter, event, text, task_id, anchor):
+        """One owned task covers acknowledgment and generation, including cancellation."""
+        try:
+            await asyncio.wait_for(adapter._send_with_retry(
+                chat_id=event.source.chat_id,
+                content="\\u26a1 Queue busy, running this in parallel",
+                reply_to=anchor,
+                metadata=self._thread_metadata_for_source(event.source, anchor),
+            ), timeout=5.0)
+        except Exception:
+            logger.debug("Busy-overflow ack send failed", exc_info=True)
+        await self._run_background_task(
+            text, event.source, task_id, event_message_id=anchor,
+        )
+
+    def _overflow_router_done(self, task):
+        self._overflow_router_tasks.pop(task, None)
+        self._background_tasks.discard(task)
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                logger.warning("Busy-overflow task failed (%s)", type(error).__name__)
+
     async def _maybe_route_overflow_to_background(self, event, session_key):
         """Send a self-contained overflow follow-up to its own background run.
 
@@ -302,31 +325,22 @@ BLOCK = '''    # ---------------------------------------------------------------
         import secrets
         task_id = "bg_ovr_%d_%s" % (int(time.time()), secrets.token_hex(16))
         anchor = self._reply_anchor_for_event(event)
-        task = asyncio.create_task(
-            self._run_background_task(
-                text,
-                event.source,
-                task_id,
-                event_message_id=anchor,
-            )
-        )
+        # Once owned by the background registry, the caller returns without
+        # an await. Ack cancellation cannot make an already dispatched event
+        # fall back into the foreground queue and run twice.
+        coroutine = self._run_overflow_background(adapter, event, text, task_id, anchor)
+        try:
+            task = asyncio.create_task(coroutine)
+        except BaseException:
+            coroutine.close()
+            raise
         self._background_tasks.add(task)
         active[task] = session_key
-        task.add_done_callback(lambda finished: active.pop(finished, None))
-        task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(self._overflow_router_done)
         logger.info(
             "Busy-overflow routed to background: session=%s mode=%s task=%s len=%d",
             session_key, mode, task_id, len(text),
         )
-        try:
-            await adapter._send_with_retry(
-                chat_id=event.source.chat_id,
-                content="\\u26a1 Queue busy, running this in parallel",
-                reply_to=anchor,
-                metadata=self._thread_metadata_for_source(event.source, anchor),
-            )
-        except Exception:
-            logger.debug("Busy-overflow ack send failed", exc_info=True)
         return True
 
 '''

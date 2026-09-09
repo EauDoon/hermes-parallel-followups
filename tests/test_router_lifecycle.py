@@ -7,6 +7,7 @@ import re
 import time
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "patches/apply_busy_overflow_router_patch.py"
@@ -106,6 +107,48 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         for value in (0, -1, 129, True, "8", None):
             CONFIG["busy_overflow_max_total"] = value
             self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+
+    async def test_ack_failure_does_not_duplicate_or_drop_dispatch(self):
+        async def fail(**kwargs):
+            raise OSError("offline")
+        self.runner.adapter._send_with_retry = fail
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        self.runner.release.set()
+        await asyncio.gather(*list(self.runner._background_tasks))
+        self.assertEqual(len(self.runner.prompts), 1)
+        self.assertFalse(self.runner._overflow_router_tasks)
+
+    async def test_cancel_during_ack_cancels_owned_task_and_releases_capacity(self):
+        started = asyncio.Event()
+        async def blocked(**kwargs):
+            started.set()
+            await asyncio.Event().wait()
+        self.runner.adapter._send_with_retry = blocked
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        await started.wait()
+        task = next(iter(self.runner._background_tasks))
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertFalse(self.runner.prompts)
+        self.assertFalse(self.runner._overflow_router_tasks)
+        self.assertFalse(self.runner._background_tasks)
+
+    async def test_failed_task_is_observed_and_capacity_released(self):
+        async def fail(*args, **kwargs):
+            raise RuntimeError("failure")
+        self.runner._run_background_task = fail
+        with self.assertLogs(namespace["logger"], level="WARNING") as logs:
+            self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+            await asyncio.gather(*list(self.runner._background_tasks), return_exceptions=True)
+        self.assertIn("RuntimeError", logs.output[0])
+        self.assertFalse(self.runner._overflow_router_tasks)
+
+    async def test_task_factory_failure_leaves_no_owned_work(self):
+        with patch("asyncio.create_task", side_effect=RuntimeError("closed")):
+            with self.assertRaises(RuntimeError):
+                await self.runner._maybe_route_overflow_to_background(event(), "session")
+        self.assertFalse(self.runner._background_tasks)
+        self.assertFalse(self.runner._overflow_router_tasks)
 
 
 if __name__ == "__main__":
