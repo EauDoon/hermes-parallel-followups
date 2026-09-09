@@ -235,6 +235,16 @@ BLOCK = '''    # ---------------------------------------------------------------
             return "independent"
         return "off"
 
+    def _overflow_router_limit(self, key, default, maximum):
+        """Invalid limits disable dispatch; zero is an explicit queue-only cap."""
+        try:
+            raw = cfg_get(_load_gateway_runtime_config(), "display", key, default=default)
+        except Exception:
+            return 0
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            return 0
+        return raw if 0 <= raw <= maximum else 0
+
     async def _maybe_route_overflow_to_background(self, event, session_key):
         """Send a self-contained overflow follow-up to its own background run.
 
@@ -272,6 +282,18 @@ BLOCK = '''    # ---------------------------------------------------------------
         if mode == "independent" and not self._classify_busy_followup(text):
             return False
 
+        # No await between admission and registration: concurrent handlers on
+        # the gateway event loop cannot oversubscribe a session's capacity.
+        active = getattr(self, "_overflow_router_tasks", None)
+        if active is None:
+            active = self._overflow_router_tasks = {}
+        for finished in tuple(active):
+            if finished.done():
+                active.pop(finished, None)
+        limit = self._overflow_router_limit("busy_overflow_max_per_session", 2, 32)
+        if sum(key == session_key for key in active.values()) >= limit:
+            return False
+
         # Import inside the injected method: installer imports do not exist
         # in gateway/run.py. Use 128 random bits even at burst throughput.
         import secrets
@@ -286,6 +308,8 @@ BLOCK = '''    # ---------------------------------------------------------------
             )
         )
         self._background_tasks.add(task)
+        active[task] = session_key
+        task.add_done_callback(lambda finished: active.pop(finished, None))
         task.add_done_callback(self._background_tasks.discard)
         logger.info(
             "Busy-overflow routed to background: session=%s mode=%s task=%s len=%d",
