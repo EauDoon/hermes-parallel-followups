@@ -99,7 +99,9 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(results), 3)
         task = next(iter(self.runner._background_tasks))
         task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        done, _ = await asyncio.wait({task}, timeout=1.0)
+        self.assertIn(task, done, "Cancellation was swallowed at acknowledgment completion")
+        self.assertTrue(task.cancelled())
         self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "new"))
         self.assertEqual(len(self.runner._overflow_router_tasks), 3)
 
@@ -159,6 +161,38 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_nontext_classifier_input_is_conservative(self):
         for value in (None, 123, ["What is the capital of Mongolia?"]):
             self.assertFalse(self.runner._classify_busy_followup(value))
+
+    async def test_ack_completion_racing_owner_cancellation_never_starts_generation(self):
+        async def racing_send(**kwargs):
+            owner = next(iter(self.runner._background_tasks))
+            asyncio.get_running_loop().call_soon(owner.cancel)
+        self.runner.adapter._send_with_retry = racing_send
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        owner = next(iter(self.runner._background_tasks))
+        done, _ = await asyncio.wait({owner}, timeout=1.0)
+        self.assertIn(owner, done, "Owner cancellation must not be swallowed")
+        self.assertTrue(owner.cancelled())
+        self.assertFalse(self.runner.prompts)
+        self.assertFalse(self.runner._overflow_router_tasks)
+
+    async def test_ack_timeout_cancels_child_and_runs_generation_once(self):
+        canceled = asyncio.Event()
+        async def blocked(**kwargs):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                canceled.set()
+        self.runner.adapter._send_with_retry = blocked
+        self.runner._OVR_ACK_TIMEOUT_SECONDS = 0.01
+        self.runner.release.set()
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        owner = next(iter(self.runner._background_tasks))
+        done, _ = await asyncio.wait({owner}, timeout=1.0)
+        self.assertIn(owner, done)
+        owner.result()
+        self.assertTrue(canceled.is_set())
+        self.assertEqual(len(self.runner.prompts), 1)
+        self.assertFalse(self.runner._overflow_router_tasks)
 
 
 if __name__ == "__main__":

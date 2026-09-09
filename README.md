@@ -108,6 +108,8 @@ cannot send the same message through both lanes. Acknowledgments time out after
 five seconds; a send failure still permits generation. Gateway cancellation
 cancels the owned task and releases capacity. Failed tasks are observed and
 release capacity, but this patch does not retry failed generation.
+Acknowledgment uses an explicitly owned child task so cancellation remains
+reliable on Python 3.10 and 3.11 even when acknowledgment completes concurrently.
 
 `hermes config set` will warn that this is not a recognized key. That is expected; it is a custom key and the patch reads it directly.
 
@@ -198,7 +200,8 @@ python3 tests/run_offline.py
 This includes classifier and router gates, concurrent admission and cancellation,
 installer failures and lifecycle checks, and private transcript scanning fixtures.
 It does not import an installed Hermes. CI runs it on Linux and Windows with
-Python 3.10, 3.12, and 3.14. Windows hosts without symlink privileges skip the
+Python 3.10, 3.11, 3.12, and 3.14. Each offline test process has a 60-second
+deadline and reports failure if exceeded. Windows hosts without symlink privileges skip the
 four symlink checks; Linux CI exercises them.
 
 For real pinned-source verification, obtain `gateway/platforms/base.py` and

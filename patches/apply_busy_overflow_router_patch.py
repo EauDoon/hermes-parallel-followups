@@ -142,6 +142,7 @@ BLOCK = '''    # ---------------------------------------------------------------
     # waits, whereas a wrongly-backgrounded one gets answered blind.
 
     _OVR_MIN_CHARS = 25
+    _OVR_ACK_TIMEOUT_SECONDS = 5.0
 
     # NOTE: "there" is deliberately absent - existential "are there any X"
     # is a very common self-contained question form, and
@@ -293,13 +294,36 @@ BLOCK = '''    # ---------------------------------------------------------------
 
     async def _run_overflow_background(self, adapter, event, text, task_id, anchor):
         """One owned task covers acknowledgment and generation, including cancellation."""
+        acknowledgment = None
         try:
-            await asyncio.wait_for(adapter._send_with_retry(
+            coroutine = adapter._send_with_retry(
                 chat_id=event.source.chat_id,
                 content="\\u26a1 Queue busy, running this in parallel",
                 reply_to=anchor,
                 metadata=self._thread_metadata_for_source(event.source, anchor),
-            ), timeout=5.0)
+            )
+            try:
+                acknowledgment = asyncio.create_task(coroutine)
+            except BaseException:
+                coroutine.close()
+                raise
+            # Python 3.10 wait_for can swallow caller cancellation when the
+            # child completes concurrently (CPython #86296). Own the child
+            # explicitly and preserve cancellation at this wait boundary.
+            done, _ = await asyncio.wait(
+                {acknowledgment}, timeout=self._OVR_ACK_TIMEOUT_SECONDS,
+            )
+            if acknowledgment in done:
+                acknowledgment.result()
+            else:
+                acknowledgment.cancel()
+                await asyncio.gather(acknowledgment, return_exceptions=True)
+                logger.debug("Busy-overflow ack timed out")
+        except asyncio.CancelledError:
+            if acknowledgment is not None:
+                acknowledgment.cancel()
+                await asyncio.gather(acknowledgment, return_exceptions=True)
+            raise
         except Exception:
             logger.debug("Busy-overflow ack send failed", exc_info=True)
         await self._run_background_task(

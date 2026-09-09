@@ -20,7 +20,13 @@ def main():
     failures = []
     for name in CHECKS:
         print(f"\nRunning {name}", flush=True)
-        result = subprocess.run([sys.executable, str(ROOT / "tests" / name)], cwd=ROOT, check=False)
+        try:
+            result = subprocess.run([sys.executable, str(ROOT / "tests" / name)],
+                                    cwd=ROOT, check=False, timeout=60)
+        except subprocess.TimeoutExpired:
+            print(f"FAILED: {name} exceeded its 60-second deadline", flush=True)
+            failures.append(name)
+            continue
         if result.returncode:
             failures.append(name)
     print("\nOFFLINE_CHECKS_OK" if not failures else "FAILED: " + ", ".join(failures))
