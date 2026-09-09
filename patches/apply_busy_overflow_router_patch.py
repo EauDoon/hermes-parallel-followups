@@ -24,6 +24,7 @@ import sys, py_compile, os, stat, tempfile, argparse
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
+parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
 args = parser.parse_args()
 PATH = args.path
 
@@ -33,7 +34,15 @@ def write_backup_exclusive(path, contents, mode):
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
-    descriptor = os.open(path, flags, mode & 0o777)
+    try:
+        descriptor = os.open(path, flags, mode & 0o777)
+    except FileExistsError:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        with open(path, "rb") as existing:
+            if existing.read() != contents:
+                raise OSError("existing recovery backup differs; preserve or relocate it before retrying")
+        return  # An exact recovery copy already exists after reverse/reapply.
     try:
         with os.fdopen(descriptor, "wb") as backup:
             descriptor = -1
@@ -412,9 +421,19 @@ if block_count:
         compile(src, PATH, "exec")
     except (SyntaxError, ValueError) as error:
         print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
-    print("ALREADY_PATCHED"); sys.exit(0)
+    if not args.reverse:
+        print("ALREADY_PATCHED"); sys.exit(0)
 
-if marker_count:
+if args.reverse:
+    if block_count:
+        out = src.replace(block, "", 1).replace(hook_new, hook_old, 1)
+    elif marker_count:
+        print("ABORT: only the exact current router can be reversed"); sys.exit(2)
+    elif src.count(hook_old) == 1 and anchor_count == 1:
+        print("ALREADY_UNPATCHED"); sys.exit(0)
+    else:
+        print("ABORT: expected an intact current or unpatched router"); sys.exit(2)
+elif marker_count:
     if marker_count != 1:
         print("ABORT: expected exactly 1 injected block marker, found %d" % marker_count); sys.exit(2)
     if hook_new_count != 1:
@@ -439,7 +458,7 @@ if args.check:
         compile(out, PATH, "exec")
     except (SyntaxError, ValueError) as error:
         print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
-    print("UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
+    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None
 try:
@@ -454,8 +473,8 @@ try:
         os.chown(candidate, st.st_uid, st.st_gid)
     bytecode = candidate + ".pyc"
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
-    backup_path = PATH + ".bak-pre-overflowrouter"
-    if marker_count:
+    backup_path = PATH + ".bak-pre-overflowrouter" + (".reverse" if args.reverse else "")
+    if marker_count and not args.reverse:
         try:
             backup_stat = os.lstat(backup_path)
         except FileNotFoundError:
@@ -477,4 +496,4 @@ finally:
         if temporary:
             try: os.unlink(temporary)
             except FileNotFoundError: pass
-print("PATCHED_OK")
+print("REVERSED_OK" if args.reverse else "PATCHED_OK")

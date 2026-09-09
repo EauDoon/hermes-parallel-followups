@@ -29,6 +29,7 @@ import sys, py_compile, os, stat, tempfile, argparse
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
+parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
 args = parser.parse_args()
 PATH = args.path
 
@@ -38,7 +39,15 @@ def write_backup_exclusive(path, contents, mode):
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
-    descriptor = os.open(path, flags, mode & 0o777)
+    try:
+        descriptor = os.open(path, flags, mode & 0o777)
+    except FileExistsError:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        with open(path, "rb") as existing:
+            if existing.read() != contents:
+                raise OSError("existing recovery backup differs; preserve or relocate it before retrying")
+        return  # An exact recovery copy already exists after reverse/reapply.
     try:
         with os.fdopen(descriptor, "wb") as backup:
             descriptor = -1
@@ -177,17 +186,22 @@ if new_count:
         compile(src, PATH, "exec")
     except (SyntaxError, ValueError) as error:
         print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
-    print("ALREADY_PATCHED"); sys.exit(0)
-if old_count != 1:
-    print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
+    if not args.reverse:
+        print("ALREADY_PATCHED"); sys.exit(0)
+    out = src.replace(new, old, 1)
+else:
+    if old_count != 1:
+        print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
+    if args.reverse:
+        print("ALREADY_UNPATCHED"); sys.exit(0)
+    out = src.replace(old, new, 1)
 
-out = src.replace(old, new, 1)
 if args.check:
     try:
         compile(out, PATH, "exec")
     except (SyntaxError, ValueError) as error:
         print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
-    print("APPLICABLE"); sys.exit(0)
+    print("REVERSIBLE" if args.reverse else "APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None
 try:
@@ -203,7 +217,7 @@ try:
     bytecode = candidate + ".pyc"
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
     write_backup_exclusive(
-        PATH + ".bak-pre-debouncefifo",
+        PATH + ".bak-pre-debouncefifo" + (".reverse" if args.reverse else ""),
         src.encode("utf-8"),
         st.st_mode,
     )
@@ -215,4 +229,4 @@ finally:
         if temporary:
             try: os.unlink(temporary)
             except FileNotFoundError: pass
-print("PATCHED_OK")
+print("REVERSED_OK" if args.reverse else "PATCHED_OK")

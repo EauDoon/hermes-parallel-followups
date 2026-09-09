@@ -44,6 +44,42 @@ class PatchWorkflowTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(list(Path(td).iterdir()), [target])
 
+    def test_apply_reverse_reapply_preserves_bytes_and_backups(self):
+        for name, old, marker, suffix in INSTALLERS:
+            for ending in ("\n", "\r\n"):
+                with self.subTest(installer=name, ending=repr(ending)), tempfile.TemporaryDirectory() as td:
+                    script = ROOT / "patches" / name
+                    target = Path(td) / "target.py"
+                    original = unpatched_source(string_constants(script), old, marker).replace("\n", ending).encode()
+                    target.write_bytes(original)
+                    for options, expected in (((), "PATCHED_OK"), (("--check", "--reverse"), "REVERSIBLE"),
+                                              (("--reverse",), "REVERSED_OK"), (("--reverse",), "ALREADY_UNPATCHED"),
+                                              ((), "PATCHED_OK")):
+                        before = target.read_bytes()
+                        result = invoke(script, target, *options)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertEqual(result.stdout.strip(), expected)
+                        if expected in ("REVERSED_OK", "ALREADY_UNPATCHED"):
+                            self.assertEqual(target.read_bytes(), original)
+                        if expected == "REVERSIBLE":
+                            self.assertEqual(target.read_bytes(), before)
+                    self.assertEqual(Path(str(target) + suffix).read_bytes(), original)
+                    self.assertEqual(Path(str(target) + suffix + ".reverse").read_bytes(), target.read_bytes())
+
+    def test_reverse_preserves_unrelated_edits(self):
+        for name, old, marker, _ in INSTALLERS:
+            with self.subTest(installer=name), tempfile.TemporaryDirectory() as td:
+                script = ROOT / "patches" / name
+                target = Path(td) / "target.py"
+                original = unpatched_source(string_constants(script), old, marker)
+                target.write_text(original)
+                self.assertEqual(invoke(script, target).returncode, 0)
+                with target.open("a") as file:
+                    file.write("\n# unrelated operator edit\n")
+                result = invoke(script, target, "--reverse")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(target.read_text(), original + "\n# unrelated operator edit\n")
+
 
 if __name__ == "__main__":
     unittest.main()
