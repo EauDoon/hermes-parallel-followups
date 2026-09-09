@@ -1,9 +1,14 @@
 """Portable lifecycle validation using disposable sources, never installed Hermes."""
 from pathlib import Path
+import contextlib
+import io
+import py_compile
+import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from test_patch_installers import INSTALLERS, ROOT, string_constants, unpatched_source
 
@@ -79,6 +84,30 @@ class PatchWorkflowTests(unittest.TestCase):
                 result = invoke(script, target, "--reverse")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(target.read_text(), original + "\n# unrelated operator edit\n")
+
+    def test_concurrent_edit_during_compilation_is_preserved(self):
+        compiler = py_compile.compile
+        for name, old, marker, suffix in INSTALLERS:
+            with self.subTest(installer=name), tempfile.TemporaryDirectory() as td:
+                script = ROOT / "patches" / name
+                target = Path(td) / "target.py"
+                original = unpatched_source(string_constants(script), old, marker)
+                target.write_text(original)
+                changed = original + "\n# concurrently edited\n"
+                def concurrent_compile(*args, **kwargs):
+                    result = compiler(*args, **kwargs)
+                    target.write_text(changed)
+                    return result
+                output = io.StringIO()
+                with patch.object(sys, "argv", [str(script), str(target)]), \
+                        patch("py_compile.compile", side_effect=concurrent_compile), \
+                        contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                    runpy.run_path(str(script), run_name="__main__")
+                self.assertEqual(raised.exception.code, 3)
+                self.assertIn("target changed", output.getvalue())
+                self.assertEqual(target.read_text(), changed)
+                self.assertFalse(Path(str(target) + suffix).exists())
+                self.assertFalse(list(Path(td).glob(".target.py.*.tmp*")))
 
 
 if __name__ == "__main__":

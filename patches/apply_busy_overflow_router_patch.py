@@ -29,6 +29,30 @@ args = parser.parse_args()
 PATH = args.path
 
 
+def checked_read(path, expected=None):
+    """Read a regular file and verify that its directory entry still owns it."""
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        raise OSError("target or backup is no longer a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        contents = stream.read()
+        after = os.fstat(stream.fileno())
+    fingerprint = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode)
+    if (fingerprint(before) != fingerprint(opened)
+            or fingerprint(opened) != fingerprint(after)
+            or fingerprint(after) != fingerprint(os.lstat(path))
+            or (expected is not None and fingerprint(after) != fingerprint(expected))):
+        raise OSError("target changed during patch preparation")
+    return contents
+
+
+def guard_target():
+    if checked_read(PATH, st) != src.encode("utf-8"):
+        raise OSError("target changed during patch preparation")
+
+
 def write_backup_exclusive(path, contents, mode):
     """Create a recovery copy without following or replacing an existing path."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -39,15 +63,15 @@ def write_backup_exclusive(path, contents, mode):
     except FileExistsError:
         if not stat.S_ISREG(os.lstat(path).st_mode):
             raise OSError("existing recovery backup is not a regular file")
-        with open(path, "rb") as existing:
-            if existing.read() != contents:
-                raise OSError("existing recovery backup differs; preserve or relocate it before retrying")
+        if checked_read(path) != contents:
+            raise OSError("existing recovery backup differs; preserve or relocate it before retrying")
         return  # An exact recovery copy already exists after reverse/reapply.
     try:
         with os.fdopen(descriptor, "wb") as backup:
             descriptor = -1
             backup.write(contents)
             backup.flush()
+            os.fsync(backup.fileno())
             if hasattr(os, "fchmod"):
                 os.fchmod(backup.fileno(), mode & 0o777)
     except Exception:
@@ -370,8 +394,7 @@ BLOCK = '''    # ---------------------------------------------------------------
 '''
 
 try:
-    with open(PATH, encoding="utf-8", newline="") as target:
-        src = target.read()
+    src = checked_read(PATH, st).decode("utf-8")
 except (OSError, UnicodeError):
     print("ABORT: target must be readable UTF-8"); sys.exit(2)
 if "\r" in src.replace("\r\n", ""):
@@ -468,11 +491,14 @@ try:
     ) as staged:
         candidate = staged.name
         staged.write(out)
+        staged.flush()
+        os.fsync(staged.fileno())
     os.chmod(candidate, st.st_mode & 0o777)
     if hasattr(os, "chown"):
         os.chown(candidate, st.st_uid, st.st_gid)
     bytecode = candidate + ".pyc"
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
+    guard_target()
     backup_path = PATH + ".bak-pre-overflowrouter" + (".reverse" if args.reverse else "")
     if marker_count and not args.reverse:
         try:
@@ -488,6 +514,7 @@ try:
         src.encode("utf-8"),
         st.st_mode,
     )
+    guard_target()
     os.replace(candidate, PATH)
 except (py_compile.PyCompileError, OSError) as e:
     print("ABORT: staged write or compile check failed; target unchanged:\n", e); sys.exit(3)
