@@ -19,9 +19,38 @@ Gated by display.busy_overflow_background:
 Idempotent, backed up, syntax-checked.
 Usage: apply_busy_overflow_router_patch.py [/opt/hermes/gateway/run.py]
 """
-import sys, py_compile, os, stat, tempfile, secrets
+import sys, py_compile, os, stat, tempfile, argparse
 
-PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/run.py"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py")
+parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
+parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
+args = parser.parse_args()
+PATH = args.path
+
+
+def checked_read(path, expected=None):
+    """Read a regular file and verify that its directory entry still owns it."""
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        raise OSError("target or backup is no longer a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        contents = stream.read()
+        after = os.fstat(stream.fileno())
+    fingerprint = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode)
+    if (fingerprint(before) != fingerprint(opened)
+            or fingerprint(opened) != fingerprint(after)
+            or fingerprint(after) != fingerprint(os.lstat(path))
+            or (expected is not None and fingerprint(after) != fingerprint(expected))):
+        raise OSError("target changed during patch preparation")
+    return contents
+
+
+def guard_target():
+    if checked_read(PATH, st) != src.encode("utf-8"):
+        raise OSError("target changed during patch preparation")
 
 
 def write_backup_exclusive(path, contents, mode):
@@ -29,12 +58,20 @@ def write_backup_exclusive(path, contents, mode):
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
-    descriptor = os.open(path, flags, mode & 0o777)
+    try:
+        descriptor = os.open(path, flags, mode & 0o777)
+    except FileExistsError:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        if checked_read(path) != contents:
+            raise OSError("existing recovery backup differs; preserve or relocate it before retrying")
+        return  # An exact recovery copy already exists after reverse/reapply.
     try:
         with os.fdopen(descriptor, "wb") as backup:
             descriptor = -1
             backup.write(contents)
             backup.flush()
+            os.fsync(backup.fileno())
             if hasattr(os, "fchmod"):
                 os.fchmod(backup.fileno(), mode & 0o777)
     except Exception:
@@ -105,6 +142,7 @@ BLOCK = '''    # ---------------------------------------------------------------
     # waits, whereas a wrongly-backgrounded one gets answered blind.
 
     _OVR_MIN_CHARS = 25
+    _OVR_ACK_TIMEOUT_SECONDS = 5.0
 
     # NOTE: "there" is deliberately absent - existential "are there any X"
     # is a very common self-contained question form, and
@@ -188,14 +226,23 @@ BLOCK = '''    # ---------------------------------------------------------------
     @classmethod
     def _classify_busy_followup(cls, text):
         """True when ``text`` is self-contained enough to run in background."""
-        t = (text or "").strip()
+        import unicodedata
+        if not isinstance(text, str):
+            return False
+        # Invisible format characters can hide a contextual token. Queue
+        # ambiguous input instead of stripping away evidence of dependency.
+        if any(unicodedata.category(char) == "Cf" for char in text):
+            return False
+        t = unicodedata.normalize("NFKC", text).replace("\\u2019", "'").replace("\\u2018", "'").strip()
+        if re.search(r"(?m)^\\s*>", t):
+            return False
         # Quote-replies and back-references are contextual by definition.
         if cls._ovr_backref_re().search(t):
             return False
         # Drop a leading gateway timestamp prefix ("[Thu 2026-07-23 16:58 +08]").
         # Matched on a bracketed group containing a 4-digit year so real text in
         # brackets is left alone.
-        t = re.sub(r"^\\[[^\\]]*\\d{4}[^\\]]*\\]\\s*", "", t).strip()
+        t = re.sub(r"^\\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}(?::\\d{2})? [+-]\\d{2}(?::?\\d{2})?\\]\\s*", "", t).strip()
         if len(t) < cls._OVR_MIN_CHARS:
             return False
         # "these days" / "those days" are time idioms, not back-references.
@@ -235,6 +282,62 @@ BLOCK = '''    # ---------------------------------------------------------------
             return "independent"
         return "off"
 
+    def _overflow_router_limit(self, key, default, maximum):
+        """Invalid limits disable dispatch; zero is an explicit queue-only cap."""
+        try:
+            raw = cfg_get(_load_gateway_runtime_config(), "display", key, default=default)
+        except Exception:
+            return 0
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            return 0
+        return raw if 0 <= raw <= maximum else 0
+
+    async def _run_overflow_background(self, adapter, event, text, task_id, anchor):
+        """One owned task covers acknowledgment and generation, including cancellation."""
+        acknowledgment = None
+        try:
+            coroutine = adapter._send_with_retry(
+                chat_id=event.source.chat_id,
+                content="\\u26a1 Queue busy, running this in parallel",
+                reply_to=anchor,
+                metadata=self._thread_metadata_for_source(event.source, anchor),
+            )
+            try:
+                acknowledgment = asyncio.create_task(coroutine)
+            except BaseException:
+                coroutine.close()
+                raise
+            # Python 3.10 wait_for can swallow caller cancellation when the
+            # child completes concurrently (CPython #86296). Own the child
+            # explicitly and preserve cancellation at this wait boundary.
+            done, _ = await asyncio.wait(
+                {acknowledgment}, timeout=self._OVR_ACK_TIMEOUT_SECONDS,
+            )
+            if acknowledgment in done:
+                acknowledgment.result()
+            else:
+                acknowledgment.cancel()
+                await asyncio.gather(acknowledgment, return_exceptions=True)
+                logger.debug("Busy-overflow ack timed out")
+        except asyncio.CancelledError:
+            if acknowledgment is not None:
+                acknowledgment.cancel()
+                await asyncio.gather(acknowledgment, return_exceptions=True)
+            raise
+        except Exception:
+            logger.debug("Busy-overflow ack send failed", exc_info=True)
+        await self._run_background_task(
+            text, event.source, task_id, event_message_id=anchor,
+        )
+
+    def _overflow_router_done(self, task):
+        self._overflow_router_tasks.pop(task, None)
+        self._background_tasks.discard(task)
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                logger.warning("Busy-overflow task failed (%s)", type(error).__name__)
+
     async def _maybe_route_overflow_to_background(self, event, session_key):
         """Send a self-contained overflow follow-up to its own background run.
 
@@ -245,6 +348,8 @@ BLOCK = '''    # ---------------------------------------------------------------
             return False
         if getattr(event, "internal", False) or event.is_command():
             return False
+        if getattr(event, "reply_to_message_id", None):
+            return False  # quoted/replied-to context is absent from a cold agent
         text = (event.text or "").strip()
         if not text:
             return False
@@ -272,43 +377,48 @@ BLOCK = '''    # ---------------------------------------------------------------
         if mode == "independent" and not self._classify_busy_followup(text):
             return False
 
-        # 8 hex chars = 32 bits of entropy. At a busy gateway emitting 5000
-        # backgrounded overflow tasks per second, the per-second birthday
-        # bound is ~2^16, well above the throughput the patch can produce.
-        # The previous os.urandom(3).hex() had only 24 bits and would have
-        # collided at the same throughput.
-        task_id = "bg_ovr_%d_%s" % (int(time.time()), secrets.token_hex(4))
+        # No await between admission and registration: concurrent handlers on
+        # the gateway event loop cannot oversubscribe a session's capacity.
+        active = getattr(self, "_overflow_router_tasks", None)
+        if active is None:
+            active = self._overflow_router_tasks = {}
+        for finished in tuple(active):
+            if finished.done():
+                active.pop(finished, None)
+        limit = self._overflow_router_limit("busy_overflow_max_per_session", 2, 32)
+        if sum(key == session_key for key in active.values()) >= limit:
+            return False
+        total_limit = self._overflow_router_limit("busy_overflow_max_total", 8, 128)
+        if len(active) >= total_limit:
+            return False
+
+        # Import inside the injected method: installer imports do not exist
+        # in gateway/run.py. Use 128 random bits even at burst throughput.
+        import secrets
+        task_id = "bg_ovr_%d_%s" % (int(time.time()), secrets.token_hex(16))
         anchor = self._reply_anchor_for_event(event)
-        task = asyncio.create_task(
-            self._run_background_task(
-                text,
-                event.source,
-                task_id,
-                event_message_id=anchor,
-            )
-        )
+        # Once owned by the background registry, the caller returns without
+        # an await. Ack cancellation cannot make an already dispatched event
+        # fall back into the foreground queue and run twice.
+        coroutine = self._run_overflow_background(adapter, event, text, task_id, anchor)
+        try:
+            task = asyncio.create_task(coroutine)
+        except BaseException:
+            coroutine.close()
+            raise
         self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        active[task] = session_key
+        task.add_done_callback(self._overflow_router_done)
         logger.info(
             "Busy-overflow routed to background: session=%s mode=%s task=%s len=%d",
             session_key, mode, task_id, len(text),
         )
-        try:
-            await adapter._send_with_retry(
-                chat_id=event.source.chat_id,
-                content="\\u26a1 Queue busy, running this in parallel",
-                reply_to=anchor,
-                metadata=self._thread_metadata_for_source(event.source, anchor),
-            )
-        except Exception:
-            logger.debug("Busy-overflow ack send failed", exc_info=True)
         return True
 
 '''
 
 try:
-    with open(PATH, encoding="utf-8", newline="") as target:
-        src = target.read()
+    src = checked_read(PATH, st).decode("utf-8")
 except (OSError, UnicodeError):
     print("ABORT: target must be readable UTF-8"); sys.exit(2)
 if "\r" in src.replace("\r\n", ""):
@@ -354,9 +464,23 @@ if block_count:
         print("ABORT: malformed current install (block=%d, patched_hook=%d, marker=%d, anchor=%d)" % counts); sys.exit(2)
     if not src.index(block_marker) < src.index(anchor) < src.index(hook_new):
         print("ABORT: injected block marker, anchor, and patched hook are out of order"); sys.exit(2)
-    print("ALREADY_PATCHED"); sys.exit(0)
+    try:
+        compile(src, PATH, "exec")
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
+    if not args.reverse:
+        print("ALREADY_PATCHED"); sys.exit(0)
 
-if marker_count:
+if args.reverse:
+    if block_count:
+        out = src.replace(block, "", 1).replace(hook_new, hook_old, 1)
+    elif marker_count:
+        print("ABORT: only the exact current router can be reversed"); sys.exit(2)
+    elif src.count(hook_old) == 1 and anchor_count == 1:
+        print("ALREADY_UNPATCHED"); sys.exit(0)
+    else:
+        print("ABORT: expected an intact current or unpatched router"); sys.exit(2)
+elif marker_count:
     if marker_count != 1:
         print("ABORT: expected exactly 1 injected block marker, found %d" % marker_count); sys.exit(2)
     if hook_new_count != 1:
@@ -376,6 +500,13 @@ else:
         print("ABORT: expected exactly 1 anchor, found %d" % anchor_count); sys.exit(2)
     out = src.replace(hook_old, hook_new, 1).replace(anchor, block + anchor, 1)
 
+if args.check:
+    try:
+        compile(out, PATH, "exec")
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
+    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
+
 candidate = bytecode = None
 try:
     with tempfile.NamedTemporaryFile(
@@ -384,13 +515,16 @@ try:
     ) as staged:
         candidate = staged.name
         staged.write(out)
+        staged.flush()
+        os.fsync(staged.fileno())
     os.chmod(candidate, st.st_mode & 0o777)
     if hasattr(os, "chown"):
         os.chown(candidate, st.st_uid, st.st_gid)
     bytecode = candidate + ".pyc"
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
-    backup_path = PATH + ".bak-pre-overflowrouter"
-    if marker_count:
+    guard_target()
+    backup_path = PATH + ".bak-pre-overflowrouter" + (".reverse" if args.reverse else "")
+    if marker_count and not args.reverse:
         try:
             backup_stat = os.lstat(backup_path)
         except FileNotFoundError:
@@ -404,6 +538,7 @@ try:
         src.encode("utf-8"),
         st.st_mode,
     )
+    guard_target()
     os.replace(candidate, PATH)
 except (py_compile.PyCompileError, OSError) as e:
     print("ABORT: staged write or compile check failed; target unchanged:\n", e); sys.exit(3)
@@ -412,4 +547,4 @@ finally:
         if temporary:
             try: os.unlink(temporary)
             except FileNotFoundError: pass
-print("PATCHED_OK")
+print("REVERSED_OK" if args.reverse else "PATCHED_OK")

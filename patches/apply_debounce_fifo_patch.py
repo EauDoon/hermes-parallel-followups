@@ -24,9 +24,38 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import sys, py_compile, os, stat, tempfile
+import sys, py_compile, os, stat, tempfile, argparse
 
-PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/platforms/base.py"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py")
+parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
+parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
+args = parser.parse_args()
+PATH = args.path
+
+
+def checked_read(path, expected=None):
+    """Read a regular file and verify that its directory entry still owns it."""
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        raise OSError("target or backup is no longer a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        contents = stream.read()
+        after = os.fstat(stream.fileno())
+    fingerprint = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode)
+    if (fingerprint(before) != fingerprint(opened)
+            or fingerprint(opened) != fingerprint(after)
+            or fingerprint(after) != fingerprint(os.lstat(path))
+            or (expected is not None and fingerprint(after) != fingerprint(expected))):
+        raise OSError("target changed during patch preparation")
+    return contents
+
+
+def guard_target():
+    if checked_read(PATH, st) != src.encode("utf-8"):
+        raise OSError("target changed during patch preparation")
 
 
 def write_backup_exclusive(path, contents, mode):
@@ -34,12 +63,20 @@ def write_backup_exclusive(path, contents, mode):
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
-    descriptor = os.open(path, flags, mode & 0o777)
+    try:
+        descriptor = os.open(path, flags, mode & 0o777)
+    except FileExistsError:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        if checked_read(path) != contents:
+            raise OSError("existing recovery backup differs; preserve or relocate it before retrying")
+        return  # An exact recovery copy already exists after reverse/reapply.
     try:
         with os.fdopen(descriptor, "wb") as backup:
             descriptor = -1
             backup.write(contents)
             backup.flush()
+            os.fsync(backup.fileno())
             if hasattr(os, "fchmod"):
                 os.fchmod(backup.fileno(), mode & 0o777)
     except Exception:
@@ -150,8 +187,7 @@ NEW = '''        state = store.pop(session_key, None)
 '''
 
 try:
-    with open(PATH, encoding="utf-8", newline="") as target:
-        src = target.read()
+    src = checked_read(PATH, st).decode("utf-8")
 except (OSError, UnicodeError):
     print("ABORT: target must be readable UTF-8"); sys.exit(2)
 if "\r" in src.replace("\r\n", ""):
@@ -169,9 +205,26 @@ if new_count:
             "ABORT: malformed current install (patched=%d, unpatched=%d)"
             % (new_count, old_count)
         ); sys.exit(2)
-    print("ALREADY_PATCHED"); sys.exit(0)
-if old_count != 1:
-    print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
+    try:
+        compile(src, PATH, "exec")
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
+    if not args.reverse:
+        print("ALREADY_PATCHED"); sys.exit(0)
+    out = src.replace(new, old, 1)
+else:
+    if old_count != 1:
+        print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
+    if args.reverse:
+        print("ALREADY_UNPATCHED"); sys.exit(0)
+    out = src.replace(old, new, 1)
+
+if args.check:
+    try:
+        compile(out, PATH, "exec")
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
+    print("REVERSIBLE" if args.reverse else "APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None
 try:
@@ -180,17 +233,21 @@ try:
         dir=os.path.dirname(os.path.abspath(PATH)), prefix="." + os.path.basename(PATH) + ".", suffix=".tmp",
     ) as staged:
         candidate = staged.name
-        staged.write(src.replace(old, new, 1))
+        staged.write(out)
+        staged.flush()
+        os.fsync(staged.fileno())
     os.chmod(candidate, st.st_mode & 0o777)
     if hasattr(os, "chown"):
         os.chown(candidate, st.st_uid, st.st_gid)
     bytecode = candidate + ".pyc"
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
+    guard_target()
     write_backup_exclusive(
-        PATH + ".bak-pre-debouncefifo",
+        PATH + ".bak-pre-debouncefifo" + (".reverse" if args.reverse else ""),
         src.encode("utf-8"),
         st.st_mode,
     )
+    guard_target()
     os.replace(candidate, PATH)
 except (py_compile.PyCompileError, OSError) as e:
     print("ABORT: staged write or compile check failed; target unchanged:\n", e); sys.exit(3)
@@ -199,4 +256,4 @@ finally:
         if temporary:
             try: os.unlink(temporary)
             except FileNotFoundError: pass
-print("PATCHED_OK")
+print("REVERSED_OK" if args.reverse else "PATCHED_OK")

@@ -110,17 +110,19 @@ CASES = [
 ]
 
 fails = []
+
+
+async def drive(runner, event):
+    routed = await runner._maybe_route_overflow_to_background(event, "sess")
+    if runner._background_tasks:
+        await asyncio.gather(*list(runner._background_tasks), return_exceptions=True)
+    return routed
+
+
 for name, mode, depth, ev, exp_routed, exp_disp, debounced in CASES:
     STATE["cfg_mode"] = mode
     r = Runner(depth, debounced)
-    routed = asyncio.get_event_loop().run_until_complete(
-        r._maybe_route_overflow_to_background(ev, "sess")
-    )
-    # let the spawned task run
-    if r._background_tasks:
-        asyncio.get_event_loop().run_until_complete(
-            asyncio.gather(*list(r._background_tasks), return_exceptions=True)
-        )
+    routed = asyncio.run(drive(r, ev))
     ok = (bool(routed) == exp_routed) and (len(r.dispatched) == exp_disp)
     acked = len(r.adapter.sent)
     if exp_routed and acked != 1:

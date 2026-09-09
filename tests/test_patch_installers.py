@@ -354,7 +354,7 @@ class PatchInstallerTests(unittest.TestCase):
                     "sys.argv",
                     [str(script), str(target)],
                 ), patch(
-                    "builtins.open",
+                    "os.open",
                     side_effect=PermissionError("simulated read denial"),
                 ), contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
                     exec(code, {"__name__": "__main__", "__file__": str(script)})
