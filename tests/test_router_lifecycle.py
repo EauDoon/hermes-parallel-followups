@@ -150,6 +150,16 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.runner._background_tasks)
         self.assertFalse(self.runner._overflow_router_tasks)
 
+    async def test_reply_context_stays_queued_even_in_all_mode(self):
+        CONFIG["busy_overflow_background"] = "all"
+        quoted = event()
+        quoted.reply_to_message_id = "earlier-message"
+        self.assertFalse(await self.runner._maybe_route_overflow_to_background(quoted, "session"))
+
+    async def test_nontext_classifier_input_is_conservative(self):
+        for value in (None, 123, ["What is the capital of Mongolia?"]):
+            self.assertFalse(self.runner._classify_busy_followup(value))
+
 
 if __name__ == "__main__":
     unittest.main()

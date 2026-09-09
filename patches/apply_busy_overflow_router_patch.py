@@ -188,14 +188,23 @@ BLOCK = '''    # ---------------------------------------------------------------
     @classmethod
     def _classify_busy_followup(cls, text):
         """True when ``text`` is self-contained enough to run in background."""
-        t = (text or "").strip()
+        import unicodedata
+        if not isinstance(text, str):
+            return False
+        # Invisible format characters can hide a contextual token. Queue
+        # ambiguous input instead of stripping away evidence of dependency.
+        if any(unicodedata.category(char) == "Cf" for char in text):
+            return False
+        t = unicodedata.normalize("NFKC", text).replace("\\u2019", "'").replace("\\u2018", "'").strip()
+        if re.search(r"(?m)^\\s*>", t):
+            return False
         # Quote-replies and back-references are contextual by definition.
         if cls._ovr_backref_re().search(t):
             return False
         # Drop a leading gateway timestamp prefix ("[Thu 2026-07-23 16:58 +08]").
         # Matched on a bracketed group containing a 4-digit year so real text in
         # brackets is left alone.
-        t = re.sub(r"^\\[[^\\]]*\\d{4}[^\\]]*\\]\\s*", "", t).strip()
+        t = re.sub(r"^\\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}(?::\\d{2})? [+-]\\d{2}(?::?\\d{2})?\\]\\s*", "", t).strip()
         if len(t) < cls._OVR_MIN_CHARS:
             return False
         # "these days" / "those days" are time idioms, not back-references.
@@ -278,6 +287,8 @@ BLOCK = '''    # ---------------------------------------------------------------
             return False
         if getattr(event, "internal", False) or event.is_command():
             return False
+        if getattr(event, "reply_to_message_id", None):
+            return False  # quoted/replied-to context is absent from a cold agent
         text = (event.text or "").strip()
         if not text:
             return False

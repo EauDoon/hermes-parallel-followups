@@ -64,6 +64,8 @@ MUST_BG = [
     "[Thu 2026-07-23 16:58:23 +08] What are the benefits of cold water swimming",
     # apostrophes must normalise ("what's" == "whats")
     "what's the difference between a stub and a mock",
+    "what’s the difference between a stub and a mock",
+    "Ｗｈａｔ are the principal benefits of solar energy?",
 ]
 
 MUST_Q = [
@@ -94,6 +96,10 @@ MUST_Q = [
     "can you clarify what you mean by the proposed architecture?",
     # A cold agent cannot see an artifact identified only by the conversation.
     "Can you summarize the report for me?",
+    "Why is it’s formatting inconsistent across the examples?",
+    "Why is th\u200bis configuration failing during startup?",
+    "What are the implications of the conclusion?\n> earlier response",
+    "[project2026] What are the most effective migration methods?",
 ]
 
 fails = []
