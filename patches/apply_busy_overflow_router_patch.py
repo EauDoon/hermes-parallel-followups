@@ -293,6 +293,9 @@ BLOCK = '''    # ---------------------------------------------------------------
         limit = self._overflow_router_limit("busy_overflow_max_per_session", 2, 32)
         if sum(key == session_key for key in active.values()) >= limit:
             return False
+        total_limit = self._overflow_router_limit("busy_overflow_max_total", 8, 128)
+        if len(active) >= total_limit:
+            return False
 
         # Import inside the injected method: installer imports do not exist
         # in gateway/run.py. Use 128 random bits even at burst throughput.

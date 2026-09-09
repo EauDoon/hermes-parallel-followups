@@ -77,11 +77,20 @@ Off by default. Enable with:
 ```yaml
 display:
   busy_overflow_background: independent   # off | independent | all
+  busy_overflow_max_per_session: 2         # integer, 0 to 32
+  busy_overflow_max_total: 8               # integer, 0 to 128
 ```
 
 - `off` — no behavior change (default)
 - `independent` — only self-contained messages are backgrounded
 - `all` — every overflow message is backgrounded
+
+Parallel work is bounded to two active overflow tasks per session and eight
+across the runner by default. At either limit, messages follow the normal queue
+path. Completed, failed, and canceled tasks release capacity. These limits count
+only this patch's overflow tasks, not manually started background work. Zero
+disables dispatch; invalid values fail closed to queueing. Lowering a cap prevents
+new admissions and lets existing tasks finish.
 
 `hermes config set` will warn that this is not a recognized key. That is expected; it is a custom key and the patch reads it directly.
 

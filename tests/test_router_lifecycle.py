@@ -91,6 +91,22 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         results = [await self.runner._maybe_route_overflow_to_background(event(), str(i)) for i in range(4)]
         self.assertEqual(results, [True] * 4)
 
+    async def test_total_cap_holds_across_concurrent_sessions(self):
+        CONFIG["busy_overflow_max_total"] = 3
+        results = await asyncio.gather(*[
+            self.runner._maybe_route_overflow_to_background(event(), str(i)) for i in range(30)])
+        self.assertEqual(sum(results), 3)
+        task = next(iter(self.runner._background_tasks))
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "new"))
+        self.assertEqual(len(self.runner._overflow_router_tasks), 3)
+
+    async def test_invalid_total_limit_disables_parallel_work(self):
+        for value in (0, -1, 129, True, "8", None):
+            CONFIG["busy_overflow_max_total"] = value
+            self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+
 
 if __name__ == "__main__":
     unittest.main()
