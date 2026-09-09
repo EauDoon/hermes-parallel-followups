@@ -24,9 +24,13 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import sys, py_compile, os, stat, tempfile
+import sys, py_compile, os, stat, tempfile, argparse
 
-PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/platforms/base.py"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py")
+parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
+args = parser.parse_args()
+PATH = args.path
 
 
 def write_backup_exclusive(path, contents, mode):
@@ -169,9 +173,21 @@ if new_count:
             "ABORT: malformed current install (patched=%d, unpatched=%d)"
             % (new_count, old_count)
         ); sys.exit(2)
+    try:
+        compile(src, PATH, "exec")
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
     print("ALREADY_PATCHED"); sys.exit(0)
 if old_count != 1:
     print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
+
+out = src.replace(old, new, 1)
+if args.check:
+    try:
+        compile(out, PATH, "exec")
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
+    print("APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None
 try:
@@ -180,7 +196,7 @@ try:
         dir=os.path.dirname(os.path.abspath(PATH)), prefix="." + os.path.basename(PATH) + ".", suffix=".tmp",
     ) as staged:
         candidate = staged.name
-        staged.write(src.replace(old, new, 1))
+        staged.write(out)
     os.chmod(candidate, st.st_mode & 0o777)
     if hasattr(os, "chown"):
         os.chown(candidate, st.st_uid, st.st_gid)

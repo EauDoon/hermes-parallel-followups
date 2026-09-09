@@ -19,9 +19,13 @@ Gated by display.busy_overflow_background:
 Idempotent, backed up, syntax-checked.
 Usage: apply_busy_overflow_router_patch.py [/opt/hermes/gateway/run.py]
 """
-import sys, py_compile, os, stat, tempfile, secrets
+import sys, py_compile, os, stat, tempfile, argparse
 
-PATH = sys.argv[1] if len(sys.argv) > 1 else "/opt/hermes/gateway/run.py"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py")
+parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
+args = parser.parse_args()
+PATH = args.path
 
 
 def write_backup_exclusive(path, contents, mode):
@@ -404,6 +408,10 @@ if block_count:
         print("ABORT: malformed current install (block=%d, patched_hook=%d, marker=%d, anchor=%d)" % counts); sys.exit(2)
     if not src.index(block_marker) < src.index(anchor) < src.index(hook_new):
         print("ABORT: injected block marker, anchor, and patched hook are out of order"); sys.exit(2)
+    try:
+        compile(src, PATH, "exec")
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
     print("ALREADY_PATCHED"); sys.exit(0)
 
 if marker_count:
@@ -425,6 +433,13 @@ else:
     if anchor_count != 1:
         print("ABORT: expected exactly 1 anchor, found %d" % anchor_count); sys.exit(2)
     out = src.replace(hook_old, hook_new, 1).replace(anchor, block + anchor, 1)
+
+if args.check:
+    try:
+        compile(out, PATH, "exec")
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
+    print("UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None
 try:
