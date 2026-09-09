@@ -272,12 +272,10 @@ BLOCK = '''    # ---------------------------------------------------------------
         if mode == "independent" and not self._classify_busy_followup(text):
             return False
 
-        # 8 hex chars = 32 bits of entropy. At a busy gateway emitting 5000
-        # backgrounded overflow tasks per second, the per-second birthday
-        # bound is ~2^16, well above the throughput the patch can produce.
-        # The previous os.urandom(3).hex() had only 24 bits and would have
-        # collided at the same throughput.
-        task_id = "bg_ovr_%d_%s" % (int(time.time()), secrets.token_hex(4))
+        # Import inside the injected method: installer imports do not exist
+        # in gateway/run.py. Use 128 random bits even at burst throughput.
+        import secrets
+        task_id = "bg_ovr_%d_%s" % (int(time.time()), secrets.token_hex(16))
         anchor = self._reply_anchor_for_event(event)
         task = asyncio.create_task(
             self._run_background_task(
