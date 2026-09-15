@@ -12,7 +12,7 @@ message to a background task instead of letting it merge. Background results
 arrive labelled with their own prompt, so question<->answer pairing survives.
 
 Gated by display.busy_overflow_background:
-    off          - default, no behaviour change
+    off          - default, no behavior change
     independent  - Option B: only self-contained messages are backgrounded
     all          - Option A: every overflow message is backgrounded
 
