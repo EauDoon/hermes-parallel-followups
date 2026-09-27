@@ -24,7 +24,7 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import sys, py_compile, os, stat, tempfile, argparse
+import sys, py_compile, os, stat, tempfile, argparse, re
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py")
@@ -195,6 +195,28 @@ if "\r" in src.replace("\r\n", ""):
 if "\r\n" in src and "\n" in src.replace("\r\n", ""):
     print("ABORT: mixed line endings are not supported"); sys.exit(2)
 line_ending = "\r\n" if "\r\n" in src else "\n"
+
+# Preconditions: the injected flush body calls these names at runtime. A missing
+# binding is a NameError raised INSIDE the flush, after the burst has already
+# left the debounce store, so the follow-up is dropped instead of falling back
+# to the merge. The router installer refuses the same class of install for the
+# same reason; refuse here too rather than at the first busy follow-up.
+def bound(source, name):
+    for pattern in (
+        r"^(?:async[ \t]+)?(?:def|class)[ \t]+%s\b" % name,
+        r"^from[ \t]+\S+[ \t]+import[ \t]+[^\n]*\b%s\b" % name,
+        r"^import[ \t]+%s\b" % name,
+        r"^[ \t]*%s[ \t]*[:=]" % name,
+    ):
+        if re.search(pattern, source, re.MULTILINE):
+            return True
+    return False
+
+
+for required in ("logger", "MessageType"):
+    if not bound(src, required):
+        print("ABORT: base-platform symbol %r is not defined or imported" % required); sys.exit(2)
+
 old = OLD.replace("\n", line_ending)
 new = NEW.replace("\n", line_ending)
 old_count = src.count(old)
