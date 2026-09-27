@@ -594,6 +594,44 @@ class PatchInstallerTests(unittest.TestCase):
                         self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
                         assert_no_staging_residue(self, directory, target)
 
+    def test_bom_target_check_agrees_with_apply_and_round_trips(self):
+        # Regression: the in-memory syntax check compiled the decoded str, so a
+        # byte order mark read as a SyntaxError. --check refused a file that the
+        # very next apply wrote successfully, and refused the installed file
+        # too, so the operator could never confirm a real install.
+        for script_name, old_name, old_marker in (
+            ("apply_debounce_fifo_patch.py", "OLD", "_queue_or_replace_pending_event"),
+            ("apply_busy_overflow_router_patch.py", "HOOK_OLD", "_maybe_route_overflow_to_background"),
+        ):
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                target = directory / "target.py"
+                original = b"\xef\xbb\xbf" + unpatched_source(
+                    string_constants(script), old_name, old_marker).encode("utf-8")
+                target.write_bytes(original)
+                environment = {**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")}
+                command = [sys.executable, str(script), str(target)]
+
+                for options, expected in ((("--check",), "APPLICABLE"), ((), "PATCHED_OK"),
+                                          (("--check",), "ALREADY_PATCHED"),
+                                          (("--check", "--reverse"), "REVERSIBLE"),
+                                          (("--reverse",), "REVERSED_OK")):
+                    with self.subTest(options=options):
+                        result = subprocess.run(
+                            [*command, *options], check=False, capture_output=True,
+                            text=True, env=environment,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertEqual(result.stdout.strip(), expected)
+                        if expected == "PATCHED_OK":
+                            patched = target.read_bytes()
+                            self.assertTrue(patched.startswith(b"\xef\xbb\xbf"))
+                            compile(patched, str(target), "exec")
+
+                self.assertEqual(target.read_bytes(), original)
+                assert_no_staging_residue(self, directory, target)
+
     def test_debounce_patch_aborts_when_injected_symbols_are_missing(self):
         # Regression: the injected flush body calls `logger` and `MessageType`.
         # If the target does not bind them, the flush raises NameError AFTER
