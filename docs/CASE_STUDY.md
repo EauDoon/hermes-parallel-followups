@@ -65,9 +65,9 @@ These choices make a false queue classification slower, while a false background
 
 ### Classifier detail
 
-The classifier is shape-based and makes no extra model call. In `independent` mode it queues a message when it finds a back-reference such as `(2)`, `option 2`, `as you said`, `what about`, `the former`, or `also`; a continuation opener such as `ok`, `leave`, `implement`, or `instead`; a deictic token such as `it`, `this`, `that`, or `ones`; an artifact-mutating verb such as `amend`, `edit`, `update`, or `bold`; fewer than 25 characters; no interrogative opener; or fewer than two content words.
+The classifier is shape-based and makes no extra model call. In `independent` mode it queues a message when it finds a back-reference such as `(2)`, `option 2`, `as you said`, `what about`, `the former`, `what did we decide`, or `also`; a continuation opener such as `ok`, `leave`, `implement`, or `instead`; a deictic token such as `it`, `this`, `that`, or `ones`; an artifact-mutating verb such as `amend`, `edit`, `update`, or `bold`; fewer than 25 characters; no interrogative opener; or fewer than two content words.
 
-Regression cases cover existential `there`, apostrophe normalization in `what's`, and the time idiom `these days`. Two safe residuals remain. `why is it there` stays queued because parsing is needed to distinguish its pronoun from a back-reference, and `the former champions of the Tour de France` stays queued because a phrase match cannot tell the pronoun from the adjective. The optional transcript command reads SQLite in read-only mode and prints aggregate counts only.
+Regression cases cover existential `there`, apostrophe normalization in `what's`, and the time idiom `these days`. First-person back-references are matched together with their verb, so `what did we decide` and `what should we do` queue while an ordinary question that merely mentions the US, or asks to be told about a fact, stays routable. Two safe residuals remain. `why is it there` stays queued because parsing is needed to distinguish its pronoun from a back-reference, and `the former champions of the Tour de France` stays queued because a phrase match cannot tell the pronoun from the adjective. The optional transcript command reads SQLite in read-only mode and prints aggregate counts only.
 
 ## 5. Reproduce the offline case
 
@@ -84,7 +84,7 @@ The recorded Windows run used Python 3.12.10 on 28-09-2026. Use your verified Py
 Recorded result:
 
 ```text
-classifier: 47 cases, ALL PASS
+classifier: 52 cases, ALL PASS
 router integration: 13 cases, 0 failures
 test_router_lifecycle.py: 13 tests, OK
 test_patch_installers.py: 17 tests, OK (skipped=4)
