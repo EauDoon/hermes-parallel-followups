@@ -11,13 +11,25 @@ CHECKS = (
     "test_classifier.py", "test_router.py", "test_router_lifecycle.py",
     "test_patch_installers.py", "test_patch_workflows.py", "test_transcript_scan.py",
 )
+# Documented in the README as separate from the offline suite because they
+# import an installed Hermes at /opt/hermes. validate_upstream.py is not
+# matched by the test_*.py glob; it needs a pinned upstream fixture.
+NEEDS_INSTALLED_HERMES = ("test_debounce_fifo.py", "test_burst_fullpath.py")
 
 
 def main():
     for directory in (ROOT / "patches", ROOT / "tests"):
         for source in directory.glob("*.py"):
             ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    failures = []
+    # A new test file that nobody added to CHECKS would otherwise never run,
+    # and CI stays green. A file may only be missing by being named above.
+    uncollected = sorted(
+        path.name for path in (ROOT / "tests").glob("test_*.py")
+        if path.name not in CHECKS and path.name not in NEEDS_INSTALLED_HERMES
+    )
+    failures = ["%s is not collected by this runner" % name for name in uncollected]
+    for name in uncollected:
+        print(f"FAILED: {name} is not in CHECKS or NEEDS_INSTALLED_HERMES", flush=True)
     for name in CHECKS:
         print(f"\nRunning {name}", flush=True)
         try:
