@@ -103,9 +103,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     args = parser.parse_args()
+    require(args.source.is_dir(),
+            f"{args.source} is not a directory; supply a directory holding "
+            f"base.py and run.py from {PIN}")
     originals = {}
     for name, digest in HASHES.items():
-        originals[name] = (args.source / name).read_bytes()
+        path = args.source / name
+        # The common mistakes are pointing at a checkout instead of the two
+        # files, or at the gateway/ tree. Name the revision and the layout the
+        # command expects, so a refused run is actionable without reading this
+        # file.
+        require(path.is_file(),
+                f"{path} is missing; supply base.py and run.py from {PIN} directly, "
+                f"without the gateway/ subdirectories")
+        originals[name] = path.read_bytes()
         require(hashlib.sha256(originals[name]).hexdigest() == digest,
                 f"{name} does not match supported public revision {PIN}")
     with tempfile.TemporaryDirectory() as td:
