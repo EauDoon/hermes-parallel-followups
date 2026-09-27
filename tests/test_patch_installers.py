@@ -594,6 +594,48 @@ class PatchInstallerTests(unittest.TestCase):
                         self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
                         assert_no_staging_residue(self, directory, target)
 
+    def test_one_line_upstream_drift_aborts_instead_of_half_applying(self):
+        # The most common way a patch repo breaks is upstream editing one line
+        # inside the anchor. The target is then 95% identical and still
+        # parses, so only exact matching can catch it. Proving the refusal here
+        # means the offline suite covers the drift contract CI cannot, because
+        # CI has no upstream fixture.
+        cases = (
+            ("apply_debounce_fifo_patch.py", "OLD", "_queue_or_replace_pending_event",
+             "            merge_text=True,\n", "            merge_text = True,\n",
+             "expected exactly 1 flush site"),
+            ("apply_busy_overflow_router_patch.py", "HOOK_OLD", "_maybe_route_overflow_to_background",
+             '            and effective_mode != "steer"\n', '            and effective_mode not in ("steer", "pause")\n',
+             "expected exactly 1 hook site"),
+        )
+
+        for script_name, old_name, old_marker, before, after, message in cases:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                source = unpatched_source(string_constants(script), old_name, old_marker)
+                self.assertEqual(source.count(before), 1, "drift fixture no longer matches the anchor")
+                drifted = source.replace(before, after, 1)
+                compile(drifted, str(script), "exec")  # still valid Python
+                target = directory / "target.py"
+                target.write_text(drifted, encoding="utf-8")
+                original = target.read_bytes()
+
+                for options in ((), ("--check",)):
+                    with self.subTest(options=options):
+                        result = subprocess.run(
+                            [sys.executable, str(script), str(target), *options],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                            env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
+                        )
+                        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                        self.assertIn(message, result.stdout)
+                        self.assertEqual(target.read_bytes(), original)
+                        self.assertFalse(list(directory.glob("target.py.bak-pre-*")))
+                        assert_no_staging_residue(self, directory, target)
+
     def test_bom_target_check_agrees_with_apply_and_round_trips(self):
         # Regression: the in-memory syntax check compiled the decoded str, so a
         # byte order mark read as a SyntaxError. --check refused a file that the
