@@ -60,7 +60,7 @@ def unpatched_source(constants, old_name, old_marker):
             "\n"
             "\n"
             "class Fixture:\n"
-            "    def flush(self, store, session_key):\n"
+            "    async def _flush_text_debounce_now(self, session_key):\n"
             + constants[old_name]
         )
     # In gateway/run.py the busy-handler anchor precedes the later queue-mode hook.
@@ -556,6 +556,43 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertTrue(backup.is_symlink())
                 self.assertEqual(recovery.read_bytes(), recovery_bytes)
                 assert_no_staging_residue(self, directory, target)
+
+    def test_debounce_patch_refuses_a_block_that_left_the_flush_method(self):
+        # The OLD block is ten plain lines with no signature. If upstream moves
+        # the flush and a copy of the same ten lines survives in another method,
+        # a count of one is not proof of the right site. The installer must
+        # refuse rather than rewrite an unrelated function.
+        script = ROOT / "patches" / "apply_debounce_fifo_patch.py"
+        constants = string_constants(script)
+        prefix = unpatched_source(constants, "OLD", "_queue_or_replace_pending_event")
+        head = prefix[:prefix.index("    async def _flush_text_debounce_now")]
+        cases = {
+            "block-elsewhere": head + "    def other_helper(self, store, session_key):\n"
+                           + constants["OLD"] + "\n    async def _flush_text_debounce_now(self, session_key):\n        return False\n",
+            "method-renamed": prefix.replace("_flush_text_debounce_now", "_flush_text_debounce", 1),
+        }
+
+        for name, source in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                target = directory / "target.py"
+                target.write_text(source, encoding="utf-8")
+                original = target.read_bytes()
+
+                for options in ((), ("--check",)):
+                    with self.subTest(case=name, options=options):
+                        result = subprocess.run(
+                            [sys.executable, str(script), str(target), *options],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                            env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
+                        )
+                        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                        self.assertIn("ABORT", result.stdout)
+                        self.assertEqual(target.read_bytes(), original)
+                        self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
+                        assert_no_staging_residue(self, directory, target)
 
     def test_debounce_patch_aborts_when_injected_symbols_are_missing(self):
         # Regression: the injected flush body calls `logger` and `MessageType`.

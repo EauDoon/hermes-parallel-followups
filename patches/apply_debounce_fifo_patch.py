@@ -186,6 +186,26 @@ NEW = '''        state = store.pop(session_key, None)
         return True
 '''
 
+def flush_site(source):
+    """Span of the first ``_flush_text_debounce_now`` body, or None.
+
+    The OLD block is ten plain lines with no signature of their own, so a
+    count of one is not proof that it is still the flush site. Bound it to
+    the method it was cut from.
+    """
+    site = re.search(
+        r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+_flush_text_debounce_now[ \t]*\(",
+        source,
+    )
+    if site is None:
+        return None
+    sibling = re.search(
+        r"(?m)^%s(?:async[ \t]+)?def[ \t]+" % re.escape(site.group(1)),
+        source[site.end():],
+    )
+    return site.end(), site.end() + sibling.start() if sibling else len(source)
+
+
 try:
     src = checked_read(PATH, st).decode("utf-8")
 except (OSError, UnicodeError):
@@ -237,6 +257,9 @@ if new_count:
 else:
     if old_count != 1:
         print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
+    site = flush_site(src)
+    if site is None or not site[0] <= src.index(old) < site[1]:
+        print("ABORT: the flush site is not inside _flush_text_debounce_now"); sys.exit(2)
     if args.reverse:
         print("ALREADY_UNPATCHED"); sys.exit(0)
     out = src.replace(old, new, 1)
