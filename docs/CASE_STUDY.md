@@ -90,6 +90,7 @@ test_router_lifecycle.py: 13 tests, OK
 test_patch_installers.py: 17 tests, OK (skipped=4)
 test_patch_workflows.py: 5 tests, OK
 test_transcript_scan.py: 4 tests, OK
+test_validate_upstream.py: 2 tests, OK
 OFFLINE_CHECKS_OK
 ```
 
@@ -104,7 +105,7 @@ gateway/platforms/base.py  6bfdf20de31ae01fbd088457b91252d2430f9bc45d0a84ba13259
 gateway/run.py             36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3767dddbda89
 ```
 
-That fixture gate was not run in the local check above because no matching public source fixture was supplied. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks require an installed Hermes at `/opt/hermes` and were not run.
+That fixture gate was not run in the local check above because no matching public source fixture was supplied. Its refusal paths, which need no upstream source, run in the offline suite as `test_validate_upstream.py`. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks require an installed Hermes at `/opt/hermes` and were not run.
 
 Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResearch/hermes-agent/commit/ed2d821021e073425994544dca292d36a12cf4a3), checked on 09-09-2026, has a different runner structure. The router installer refuses it because its required hook is absent. Compatibility with that revision and newer releases is unsupported. An anchor failure must not be bypassed.
 
