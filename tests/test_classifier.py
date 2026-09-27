@@ -66,6 +66,11 @@ MUST_BG = [
     "what's the difference between a stub and a mock",
     "what’s the difference between a stub and a mock",
     "Ｗｈａｔ are the principal benefits of solar energy?",
+    # The first-person rule is matched with its verb, so an ordinary question
+    # that merely mentions a country or asks to be told something stays
+    # routable.
+    "what is the trade deficit of the US compared with Japan",
+    "tell me about the population of Reykjavik",
 ]
 
 MUST_Q = [
@@ -109,6 +114,11 @@ MUST_Q = [
     # phrase match cannot tell the pronoun from the adjective, and this
     # classifier resolves that ambiguity toward the queue.
     "what are the former champions of the Tour de France",
+    # A first-person follow-up asks about state the cold agent cannot see:
+    # what "we" agreed, decided, or meant is only in the turn in flight.
+    "what did we decide about the budget allocation",
+    "how does our current exposure compare to the index",
+    "why do you think we should wait for the print",
 ]
 
 fails = []

@@ -213,6 +213,9 @@ BLOCK = '''    # ---------------------------------------------------------------
             # "the former"/"the latter" are matched as phrases rather than added
             # to _OVR_DEICTIC: a bare "former" (former champions, former
             # employers) is ordinary vocabulary in a self-contained question.
+            # The first-person forms are matched together with their verb for
+            # the same reason: a bare "us" collides with the country, and "me"
+            # would capture "tell me about X", which is self-contained.
             rx = re.compile(
                 r"\\(\\s*\\d+\\s*\\)"
                 r"|\\boption\\s*\\d"
@@ -227,6 +230,8 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\bas\\s+you\\s+\\w+"
                 r"|\\byou\\s+(said|mentioned|recommended|suggested|are|were|just|gave|wrote)"
                 r"|\\byou\\s+(mean|meant|meaning)\\b"
+                r"|\\b(?:we|us|our|my)\\s+(?:agreed?|decided?|discussed?|chose|chosen|picked|settled|wanted|want|needed|need|think|thought|believe|assumed?|planned?|proposed|concluded|found|noted|asked?|said|say|meant?|meaning|intended?|should|would|could|must|will|can)\\b"
+                r"|\\b(?:what|how|why|which|where|when|who)\\s+(?:did|do|does|are|is|was|were|should|would|could|have|has)\\s+(?:we|us|our|my)\\b"
                 r"|\\b(above|earlier|previous|previously)\\b"
                 r"|\\bthe\\s+(?:former|latter)\\b"
                 r"|\\blast\\s+(one|answer|reply|message|point)\\b"
