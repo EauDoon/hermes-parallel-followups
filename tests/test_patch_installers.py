@@ -44,8 +44,21 @@ def string_constants(script: Path):
 
 def unpatched_source(constants, old_name, old_marker):
     if old_name == "OLD":
+        # Synthetic base.py stand-in. `logger` and `MessageType` are the two
+        # names the injected flush body calls at runtime; the installer now
+        # refuses a target that does not bind them.
         return (
             f"# {old_marker} is supplied by the runner\n"
+            "import logging\n"
+            "\n"
+            "logger = logging.getLogger(__name__)\n"
+            "\n"
+            "\n"
+            "class MessageType:\n"
+            "    TEXT = 'text'\n"
+            "    PHOTO = 'photo'\n"
+            "\n"
+            "\n"
             "class Fixture:\n"
             "    def flush(self, store, session_key):\n"
             + constants[old_name]
@@ -542,6 +555,42 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertEqual(target.read_text(encoding="utf-8"), source)
                 self.assertTrue(backup.is_symlink())
                 self.assertEqual(recovery.read_bytes(), recovery_bytes)
+                assert_no_staging_residue(self, directory, target)
+
+    def test_debounce_patch_aborts_when_injected_symbols_are_missing(self):
+        # Regression: the injected flush body calls `logger` and `MessageType`.
+        # If the target does not bind them, the flush raises NameError AFTER
+        # the burst has left the debounce store, so the follow-up is dropped
+        # instead of falling back to the pending-slot merge.
+        script = ROOT / "patches" / "apply_debounce_fifo_patch.py"
+        constants = string_constants(script)
+        source = unpatched_source(constants, "OLD", "_queue_or_replace_pending_event")
+        cases = {
+            # Both variants still parse; only the required name is unbound, so
+            # the installer must be the thing that refuses them.
+            "logger-renamed": source.replace(
+                "logger = logging.getLogger(__name__)", "log = logging.getLogger(__name__)", 1),
+            "message-type-renamed": source.replace("class MessageType:", "class MessageKind:", 1),
+        }
+
+        for name, incomplete in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                target = directory / "target.py"
+                target.write_text(incomplete, encoding="utf-8")
+                original = target.read_bytes()
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
+                )
+
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("ABORT: base-platform symbol", result.stdout)
+                self.assertEqual(target.read_bytes(), original)
+                self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
                 assert_no_staging_residue(self, directory, target)
 
     def test_router_patch_aborts_when_gateway_runtime_symbols_are_missing(self):
