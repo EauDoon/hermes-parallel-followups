@@ -2,7 +2,7 @@
 
 This case study explains one narrow debugging result: a busy Hermes session can turn several separate follow-ups into one unlabeled turn. It records the smallest effective fix, the safety fallbacks around it, and the local evidence that can be reproduced without an installed Hermes gateway.
 
-**Evidence status:** offline checks passed on 16-09-2026 with Python 3.12.14. The pinned Hermes source fixture and live gateway checks were not run in that check.
+**Evidence status:** offline checks passed on 28-09-2026 with Python 3.12.10 on Windows. The pinned Hermes source fixture and live gateway checks were not run in that check.
 
 ## 1. The symptom
 
@@ -65,9 +65,9 @@ These choices make a false queue classification slower, while a false background
 
 ### Classifier detail
 
-The classifier is shape-based and makes no extra model call. In `independent` mode it queues a message when it finds a back-reference such as `(2)`, `option 2`, `as you said`, `what about`, or `also`; a continuation opener such as `ok`, `leave`, `implement`, or `instead`; a deictic token such as `it`, `this`, `that`, or `ones`; an artifact-mutating verb such as `amend`, `edit`, `update`, or `bold`; fewer than 25 characters; no interrogative opener; or fewer than two content words.
+The classifier is shape-based and makes no extra model call. In `independent` mode it queues a message when it finds a back-reference such as `(2)`, `option 2`, `as you said`, `what about`, `the former`, or `also`; a continuation opener such as `ok`, `leave`, `implement`, or `instead`; a deictic token such as `it`, `this`, `that`, or `ones`; an artifact-mutating verb such as `amend`, `edit`, `update`, or `bold`; fewer than 25 characters; no interrogative opener; or fewer than two content words.
 
-Regression cases cover existential `there`, apostrophe normalization in `what's`, and the time idiom `these days`. The safe residual is `why is it there`, which remains queued because parsing is needed to distinguish its pronoun from a back-reference. The optional transcript command reads SQLite in read-only mode and prints aggregate counts only.
+Regression cases cover existential `there`, apostrophe normalization in `what's`, and the time idiom `these days`. Two safe residuals remain. `why is it there` stays queued because parsing is needed to distinguish its pronoun from a back-reference, and `the former champions of the Tour de France` stays queued because a phrase match cannot tell the pronoun from the adjective. The optional transcript command reads SQLite in read-only mode and prints aggregate counts only.
 
 ## 5. Reproduce the offline case
 
@@ -79,15 +79,15 @@ From the repository root, run:
 python3 tests/run_offline.py
 ```
 
-The recorded Windows run used Python 3.12.14. Use your verified Python interpreter to run the same command above.
+The recorded Windows run used Python 3.12.10 on 28-09-2026. Use your verified Python interpreter to run the same command above.
 
 Recorded result:
 
 ```text
-classifier: 44 cases, ALL PASS
+classifier: 47 cases, ALL PASS
 router integration: 13 cases, 0 failures
 test_router_lifecycle.py: 13 tests, OK
-test_patch_installers.py: 13 tests, OK (skipped=4)
+test_patch_installers.py: 17 tests, OK (skipped=4)
 test_patch_workflows.py: 5 tests, OK
 test_transcript_scan.py: 4 tests, OK
 OFFLINE_CHECKS_OK

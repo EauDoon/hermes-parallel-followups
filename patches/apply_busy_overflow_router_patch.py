@@ -210,6 +210,9 @@ BLOCK = '''    # ---------------------------------------------------------------
         """Compiled back-reference detector (lazy, cached on the class)."""
         rx = cls.__dict__.get("_OVR_BACKREF_COMPILED")
         if rx is None:
+            # "the former"/"the latter" are matched as phrases rather than added
+            # to _OVR_DEICTIC: a bare "former" (former champions, former
+            # employers) is ordinary vocabulary in a self-contained question.
             rx = re.compile(
                 r"\\(\\s*\\d+\\s*\\)"
                 r"|\\boption\\s*\\d"
@@ -225,6 +228,7 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\byou\\s+(said|mentioned|recommended|suggested|are|were|just|gave|wrote)"
                 r"|\\byou\\s+(mean|meant|meaning)\\b"
                 r"|\\b(above|earlier|previous|previously)\\b"
+                r"|\\bthe\\s+(?:former|latter)\\b"
                 r"|\\blast\\s+(one|answer|reply|message|point)\\b"
                 r"|\\b(what|how)\\s+about\\b"
                 r"|\\balso\\b"

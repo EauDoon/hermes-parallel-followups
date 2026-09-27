@@ -100,6 +100,15 @@ MUST_Q = [
     "Why is th\u200bis configuration failing during startup?",
     "What are the implications of the conclusion?\n> earlier response",
     "[project2026] What are the most effective migration methods?",
+    # "the former"/"the latter" resolve only against the turn in flight. A
+    # background agent starts with no history, so it cannot tell which of two
+    # previously offered options is meant.
+    "how does the former compare to the latter",
+    "which of the latter two options is cheaper to run",
+    # Deliberate residual, in the same class as "the previous champions": a
+    # phrase match cannot tell the pronoun from the adjective, and this
+    # classifier resolves that ambiguity toward the queue.
+    "what are the former champions of the Tour de France",
 ]
 
 fails = []
