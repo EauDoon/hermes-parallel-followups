@@ -58,6 +58,17 @@ def guard_target():
         raise OSError("target changed during patch preparation")
 
 
+def parses(text):
+    """Compile the bytes an apply would write, not the decoded str.
+
+    py_compile reads the staged file back as bytes, so it applies Python's own
+    BOM and encoding-cookie detection. Compiling the str instead makes a byte
+    order mark a SyntaxError, and --check would then refuse a file that the
+    very next apply writes successfully.
+    """
+    return compile(text.encode("utf-8"), PATH, "exec")
+
+
 def write_backup_exclusive(path, contents, mode):
     """Create a recovery copy without following or replacing an existing path."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -248,7 +259,7 @@ if new_count:
             % (new_count, old_count)
         ); sys.exit(2)
     try:
-        compile(src, PATH, "exec")
+        parses(src)
     except (SyntaxError, ValueError) as error:
         print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
     if not args.reverse:
@@ -266,7 +277,7 @@ else:
 
 if args.check:
     try:
-        compile(out, PATH, "exec")
+        parses(out)
     except (SyntaxError, ValueError) as error:
         print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
     print("REVERSIBLE" if args.reverse else "APPLICABLE"); sys.exit(0)
