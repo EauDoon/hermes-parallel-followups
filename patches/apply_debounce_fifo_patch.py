@@ -484,7 +484,11 @@ def _binds(body, name):
             if node.name == name:
                 return True
             continue
-        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith)):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            if _binds(node.body, name):
+                return True
+            continue
+        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While)):
             if _binds(node.body, name) or _binds(node.orelse, name):
                 return True
             continue

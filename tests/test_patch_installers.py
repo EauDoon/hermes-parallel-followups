@@ -65,7 +65,7 @@ def unpatched_source(constants, old_name, old_marker):
         )
     # In gateway/run.py the busy-handler anchor precedes the later queue-mode hook.
     return (
-        "# fixture\nimport re\nimport os\nimport time\nimport asyncio\nfrom hermes_cli.config import _load_gateway_runtime_config, cfg_get\n\n"
+        "# fixture\nimport logging\nimport re\nimport os\nimport time\nimport asyncio\nfrom hermes_cli.config import _load_gateway_runtime_config, cfg_get\nlogger = logging.getLogger('fixture')\n\n"
         f"# {old_marker} is described in the release notes\n"
         "class Fixture:\n"
         + constants["ANCHOR"]
@@ -963,6 +963,7 @@ class PatchInstallerTests(unittest.TestCase):
                 "from hermes_cli.config import _load_gateway_runtime_config  # cfg_get was removed\n",
                 1,
             ),
+            "logger-removed": source.replace("logger = logging.getLogger('fixture')\n", "", 1),
         }
         accepts = {
             "combined-import": source.replace(

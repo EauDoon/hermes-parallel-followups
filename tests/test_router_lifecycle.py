@@ -194,6 +194,24 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.runner.prompts), 1)
         self.assertFalse(self.runner._overflow_router_tasks)
 
+    async def test_logger_failure_does_not_dispatch_and_queue(self):
+        # The platform caller queues the event when the busy handler raises.
+        # logger.info used to run after the task was registered, so a missing
+        # logger did both.
+        saved = namespace.pop("logger")
+        queued = []
+        try:
+            try:
+                if await self.runner._maybe_route_overflow_to_background(event(), "session"):
+                    return
+            except Exception:
+                queued.append("foreground")
+        finally:
+            namespace["logger"] = saved
+        self.assertEqual(queued, ["foreground"])
+        self.assertFalse(self.runner._background_tasks)
+        self.assertFalse(getattr(self.runner, "_overflow_router_tasks", {}))
+
 
 if __name__ == "__main__":
     unittest.main()
