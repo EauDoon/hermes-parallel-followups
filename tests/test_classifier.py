@@ -71,6 +71,7 @@ MUST_BG = [
     # routable.
     "what is the trade deficit of the US compared with Japan",
     "tell me about the population of Reykjavik",
+    "what is the best option a family has for heating a home in winter",
     # "did you recommend" is a back-reference. A request to recommend
     # something new is self-contained and must stay routable.
     "can you recommend a city with reliable winter transit",
@@ -83,6 +84,12 @@ MUST_Q = [
     "do it",
     "tell me more about (2) and (3)",
     "tell me more about option two",
+    # Digits and number-words are queued. A lettered choice is the same
+    # back-reference: "(b)" and "option B" only resolve against the list
+    # already on the table. Lowercase "option a family" is ordinary English
+    # and stays in the background cases below.
+    "compare (a) with (b) for the long term operating cost",
+    "how does option A compare with option B for long term cost",
     "which second option should we choose",
     "yes let's set it up",
     "leave it, let's see how the job runs",
