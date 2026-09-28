@@ -635,6 +635,9 @@ if args.check:
         print("ABORT: the recovery copy blocks this write; target unchanged:\n", error); sys.exit(3)
     if conflict:
         print("ABORT: the recovery copy blocks this write; target unchanged:\n", conflict); sys.exit(3)
+    parent = os.path.dirname(os.path.abspath(PATH)) or "."
+    if not os.access(parent, os.W_OK | os.X_OK):
+        print("ABORT: target directory is not writable; the install cannot create its temporary file:\n", parent); sys.exit(3)
     print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None

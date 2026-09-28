@@ -640,6 +640,34 @@ class PatchInstallerTests(unittest.TestCase):
                             self.assertEqual(entries(directory), before)
                             assert_no_staging_residue(self, directory, target)
 
+    def test_check_refuses_a_directory_the_install_cannot_write(self):
+        # --check only read the target, so a directory that cannot hold the
+        # temporary file or the recovery copy still printed APPLICABLE. The
+        # install then aborted.
+        if os.name == "nt":
+            self.skipTest("POSIX directory modes do not apply")
+        for script_name, old_name, old_marker, _suffix in INSTALLERS:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                target = directory / "target.py"
+                target.write_text(
+                    unpatched_source(string_constants(script), old_name, old_marker),
+                    encoding="utf-8",
+                )
+                original = target.read_bytes()
+                os.chmod(directory, 0o555)
+                try:
+                    result = self.run_installer(script, target, directory, "--check")
+                    applied = self.run_installer(script, target, directory)
+                finally:
+                    os.chmod(directory, 0o755)
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertIn("not writable", result.stdout)
+                self.assertEqual(applied.returncode, 3, applied.stdout + applied.stderr)
+                self.assertEqual(target.read_bytes(), original)
+                assert_no_staging_residue(self, directory, target)
+
     def test_check_still_approves_a_recovery_copy_the_write_may_reuse(self):
         # The other side of the same contract: after a reverse and a reapply
         # the copy on disk is byte-identical, the write reuses it, and --check
