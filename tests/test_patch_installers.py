@@ -1031,8 +1031,62 @@ class PatchInstallerTests(unittest.TestCase):
                     check=False, capture_output=True, text=True,
                     env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
                 )
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("PATCHED_OK", result.stdout)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PATCHED_OK", result.stdout)
+
+    def test_reverse_removes_a_patch_that_does_not_bind_its_runtime_names(self):
+        # The symbol check used to run before reverse. A flush or router
+        # installed when a function-local name counted as a binding could
+        # not be uninstalled, so the NameError stayed in the running method.
+        cases = (
+            (
+                "apply_debounce_fifo_patch.py",
+                "OLD",
+                "NEW",
+                "_queue_or_replace_pending_event",
+                "logger = logging.getLogger(__name__)",
+                "def _configure():\n    logger = logging.getLogger(__name__)",
+            ),
+            (
+                "apply_busy_overflow_router_patch.py",
+                "HOOK_OLD",
+                "HOOK_NEW",
+                "_maybe_route_overflow_to_background",
+                "logger = logging.getLogger('fixture')\n",
+                "",
+            ),
+        )
+        for script_name, old_name, new_name, marker, binding, removed in cases:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                constants = string_constants(script)
+                source = unpatched_source(constants, old_name, marker)
+                installed = source.replace(constants[old_name], constants[new_name], 1)
+                if "BLOCK" in constants and "ANCHOR" in constants:
+                    installed = installed.replace(
+                        constants["ANCHOR"], constants["BLOCK"] + constants["ANCHOR"], 1,
+                    )
+                installed = installed.replace(binding, removed, 1)
+                target = directory / "target.py"
+                target.write_text(installed, encoding="utf-8")
+                original = target.read_bytes()
+
+                check = self.run_installer(script, target, directory, "--reverse", "--check")
+                self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+                self.assertEqual(check.stdout.strip(), "REVERSIBLE")
+                self.assertEqual(target.read_bytes(), original)
+
+                reversed_result = self.run_installer(script, target, directory, "--reverse")
+                self.assertEqual(reversed_result.returncode, 0, reversed_result.stdout + reversed_result.stderr)
+                self.assertEqual(reversed_result.stdout.strip(), "REVERSED_OK")
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(constants[old_name], text)
+                self.assertNotIn(constants[new_name], text)
+
+                again = self.run_installer(script, target, directory)
+                self.assertEqual(again.returncode, 2, again.stdout + again.stderr)
+                self.assertIn("ABORT", again.stdout)
 
 
 if __name__ == "__main__":

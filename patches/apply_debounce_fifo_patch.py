@@ -547,9 +547,16 @@ def bound(source, name):
     return _binds(tree.body, name)
 
 
-for required in ("logger", "MessageType"):
-    if not bound(src, required):
-        print("ABORT: base-platform symbol %r is not defined or imported" % required); sys.exit(2)
+def require_runtime_symbols():
+    """Refuse an install whose injected flush would NameError.
+
+    Reverse removes those calls, so a file that does not bind the names can
+    still be uninstalled. Running this before reverse left the NameError in
+    place on a flush an older check had accepted.
+    """
+    for required in ("logger", "MessageType"):
+        if not bound(src, required):
+            print("ABORT: base-platform symbol %r is not defined or imported" % required); sys.exit(2)
 
 def recovery_path(upgrading):
     """Backup path the write uses.
@@ -604,6 +611,7 @@ if new_count:
     except (SyntaxError, ValueError) as error:
         print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
     if not args.reverse:
+        require_runtime_symbols()
         print("ALREADY_PATCHED"); sys.exit(0)
     out = src.replace(new, old, 1)
 elif legacy_count or media_count:
@@ -620,6 +628,7 @@ elif legacy_count or media_count:
     if args.reverse:
         out = src.replace(region, old, 1)
     else:
+        require_runtime_symbols()
         upgrading = True
         out = src.replace(region, new, 1)
 else:
@@ -630,6 +639,7 @@ else:
         print("ABORT: the flush site is not inside _flush_text_debounce_now"); sys.exit(2)
     if args.reverse:
         print("ALREADY_UNPATCHED"); sys.exit(0)
+    require_runtime_symbols()
     out = src.replace(old, new, 1)
 
 if args.check:

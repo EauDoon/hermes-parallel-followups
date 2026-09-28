@@ -568,21 +568,24 @@ def _router_binds(body, name):
     return False
 
 
-# Preconditions: the injected router calls these names at runtime. A missing
-# one is a NameError. For cfg_get and the config loader, the method catches
-# Exception and returns "off", so the router silently disables. A docstring
-# or a comment that merely contains the import text is not a binding, and an
-# alias binds the other name.
-try:
-    _router_tree = ast.parse(src)
-except SyntaxError:
-    _router_tree = None
-if _router_tree is not None:
+def require_router_symbols():
+    """Refuse an install whose injected router would NameError.
+
+    Reverse removes those calls, so a file that does not bind the names can
+    still be uninstalled. A missing cfg_get is otherwise swallowed and the
+    router stays off. A docstring or a comment is not a binding, and an
+    alias binds the other name. A file that does not parse is reported by
+    the later syntax check rather than as a missing name.
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return
     for required in ("re", "os", "time", "asyncio"):
-        if not _router_binds(_router_tree.body, required):
+        if not _router_binds(tree.body, required):
             print("ABORT: missing top-level import %r" % ("import " + required)); sys.exit(2)
     for required in ("_load_gateway_runtime_config", "cfg_get", "logger"):
-        if not _router_binds(_router_tree.body, required):
+        if not _router_binds(tree.body, required):
             print("ABORT: gateway runtime symbol %r is not defined or imported at top level" % required); sys.exit(2)
 
 block_count = src.count(block)
@@ -633,6 +636,7 @@ if block_count:
     except (SyntaxError, ValueError) as error:
         print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
     if not args.reverse:
+        require_router_symbols()
         print("ALREADY_PATCHED"); sys.exit(0)
 
 if args.reverse:
@@ -656,12 +660,14 @@ elif marker_count:
     block_end = src.index(anchor)
     if not block_start < block_end < hook_start:
         print("ABORT: injected block marker, anchor, and patched hook are out of order"); sys.exit(2)
+    require_router_symbols()
     out = src[:block_start] + block + src[block_end:]
 else:
     if src.count(hook_old) != 1:
         print("ABORT: expected exactly 1 hook site, found %d" % src.count(hook_old)); sys.exit(2)
     if anchor_count != 1:
         print("ABORT: expected exactly 1 anchor, found %d" % anchor_count); sys.exit(2)
+    require_router_symbols()
     out = src.replace(hook_old, hook_new, 1).replace(anchor, block + anchor, 1)
 
 if args.check:
