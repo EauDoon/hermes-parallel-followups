@@ -251,6 +251,11 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\bas\\s+you\\s+\\w+"
                 r"|\\byou\\s+(said|mentioned|recommended|suggested|are|were|just|gave|wrote)"
                 r"|\\byou\\s+(mean|meant|meaning)\\b"
+                # "you recommended" misses the grammatical "did you recommend",
+                # and "did you decide" was not listed at all. Both ask about
+                # an action the cold agent cannot see. "can you recommend"
+                # does not match, so a new request stays routable.
+                r"|\\bdid\\s+you\\s+(?:say|mention|recommend|suggest|give|write|decide|choose|pick|set|ask|put|mean)\\b"
                 r"|\\b(?:we|us|our|my)\\s+(?:agreed?|decided?|discussed?|chose|chosen|picked|settled|wanted|want|needed|need|think|thought|believe|assumed?|planned?|proposed|concluded|found|noted|asked?|said|say|meant?|meaning|intended?|should|would|could|must|will|can)\\b"
                 r"|\\b(?:what|how|why|which|where|when|who)\\s+(?:did|do|does|are|is|was|were|should|would|could|have|has)\\s+(?:we|us|our|my)\\b"
                 # "which model did we pick" puts words between the wh-word and
