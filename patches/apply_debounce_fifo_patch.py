@@ -24,7 +24,7 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import sys, py_compile, os, stat, tempfile, argparse, re
+import ast, sys, py_compile, os, stat, tempfile, argparse, re
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py")
@@ -464,16 +464,56 @@ line_ending = "\r\n" if "\r\n" in src else "\n"
 # left the debounce store, so the follow-up is dropped instead of falling back
 # to the merge. The router installer refuses the same class of install for the
 # same reason; refuse here too rather than at the first busy follow-up.
-def bound(source, name):
-    for pattern in (
-        r"^(?:async[ \t]+)?(?:def|class)[ \t]+%s\b" % name,
-        r"^from[ \t]+\S+[ \t]+import[ \t]+[^\n]*\b%s\b" % name,
-        r"^import[ \t]+%s\b" % name,
-        r"^[ \t]*%s[ \t]*[:=]" % name,
-    ):
-        if re.search(pattern, source, re.MULTILINE):
-            return True
+def _target_binds(target, name):
+    if isinstance(target, ast.Name):
+        return target.id == name
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_target_binds(element, name) for element in target.elts)
     return False
+
+
+def _binds(body, name):
+    """True when ``name`` is bound by these module-level statements.
+
+    Function and class bodies are not module scope. An annotation with no
+    value, an import alias, and a comment do not bind the name either; a
+    parenthesized import does, because it is still an import.
+    """
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                return True
+            continue
+        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith)):
+            if _binds(node.body, name) or _binds(node.orelse, name):
+                return True
+            continue
+        if isinstance(node, ast.Try):
+            parts = [node.body, node.orelse, node.finalbody]
+            parts.extend(handler.body for handler in node.handlers)
+            if any(_binds(part, name) for part in parts):
+                return True
+            continue
+        if isinstance(node, ast.Assign) and any(_target_binds(target, name) for target in node.targets):
+            return True
+        if isinstance(node, ast.AnnAssign) and node.value is not None and _target_binds(node.target, name):
+            return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound_name = alias.asname or alias.name.split(".")[0]
+                if bound_name == name:
+                    return True
+    return False
+
+
+def bound(source, name):
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # The later syntax check reports this. Calling it a missing name
+        # hides a file that does bind the name and simply does not parse.
+        return True
+    return _binds(tree.body, name)
 
 
 for required in ("logger", "MessageType"):

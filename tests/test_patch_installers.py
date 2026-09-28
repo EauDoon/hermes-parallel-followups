@@ -885,6 +885,61 @@ class PatchInstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
             self.assertIn("ABORT: gateway runtime symbol", result.stdout)
 
+    def test_debounce_symbol_check_requires_a_real_module_binding(self):
+        # The regex accepted a comment, an alias, an annotation with no value,
+        # a dict key, and a function-local assignment, and it rejected a
+        # parenthesized import that really does bind the name.
+        script = ROOT / "patches" / "apply_debounce_fifo_patch.py"
+        constants = string_constants(script)
+        source = unpatched_source(constants, "OLD", "_queue_or_replace_pending_event")
+        refuses = {
+            "annotation-only": source.replace(
+                "logger = logging.getLogger(__name__)", "logger: object", 1),
+            "comment-mention": source.replace(
+                "logger = logging.getLogger(__name__)\n",
+                "from logging import getLogger  # logger is configured elsewhere\n", 1),
+            "imported-under-another-name": source.replace(
+                "logger = logging.getLogger(__name__)", "import logger as log", 1),
+            "dict-key": source.replace(
+                "logger = logging.getLogger(__name__)", "config = {\n    logger: 'x',\n}", 1),
+            "function-local": source.replace(
+                "logger = logging.getLogger(__name__)",
+                "def _configure():\n    logger = logging.getLogger(__name__)", 1),
+        }
+        accepts = source.replace(
+            "class MessageType:\n    TEXT = 'text'\n    PHOTO = 'photo'\n",
+            "from typing import (\n    MessageType,\n)\n",
+            1,
+        )
+
+        for name, incomplete in refuses.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                target = directory / "target.py"
+                target.write_text(incomplete, encoding="utf-8")
+                original = target.read_bytes()
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False, capture_output=True, text=True,
+                    env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("ABORT: base-platform symbol", result.stdout)
+                self.assertEqual(target.read_bytes(), original)
+                assert_no_staging_residue(self, directory, target)
+
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td)
+            target = directory / "target.py"
+            target.write_text(accepts, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(script), str(target)],
+                check=False, capture_output=True, text=True,
+                env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PATCHED_OK", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
