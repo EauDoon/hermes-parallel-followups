@@ -126,7 +126,14 @@ except OSError as e:
 if not stat.S_ISREG(st.st_mode):
     print("ABORT: target must be a regular file (symlinks are not patched)"); sys.exit(2)
 
-OLD = """        state = store.pop(session_key, None)
+OLD = """        existing_pending = self._pending_messages.get(session_key)
+        if (
+            existing_pending is not None
+            and not self._can_merge_text_debounce_events(existing_pending, state.event)
+        ):
+            return False
+
+        state = store.pop(session_key, None)
         if state is None:
             return False
         merge_pending_message_event(
@@ -217,7 +224,107 @@ PREVIOUS_NEW = '''        state = store.pop(session_key, None)
         return True
 '''
 
-NEW = '''        state = store.pop(session_key, None)
+NEW = '''        existing_pending = self._pending_messages.get(session_key)
+        # Different senders must not share a turn. Returning before the FIFO
+        # left this burst in the debounce store after its timer was cancelled,
+        # so a second person was never given a turn of their own. The FIFO
+        # keeps the two senders apart. The historical merge below would not,
+        # and neither would an in-place media merge, so those two paths put
+        # the burst back instead of mixing it into the other sender's slot.
+        _senders_differ = (
+            existing_pending is not None
+            and not self._can_merge_text_debounce_events(existing_pending, state.event)
+        )
+        state = store.pop(session_key, None)
+        if state is None:
+            return False
+        # Hand the flushed burst to the runner's FIFO so each follow-up gets
+        # its OWN turn in arrival order. The historical
+        # call below newline-merged it into the single pending slot with no
+        # time bound, so everything sent during a long turn arrived as one
+        # mashed-together turn -- the #43066 sub-bug, fixed for interrupt /
+        # steer-fallback / /queue but never for this path.
+        #
+        # The runner is reachable through the bound busy-session handler it
+        # already installed on this adapter, so no extra wiring is required.
+        # Photo/album merge semantics are preserved inside
+        # _queue_or_replace_pending_event itself.
+        #
+        # ``_queue_or_replace_pending_event`` can DECLINE silently: it returns
+        # without queueing and without raising when the source resolves to no
+        # adapter, or when the per-session pending cap is reached. Treating the
+        # call as success there would DROP the burst, where the historical
+        # merge would still have delivered it (mashed, but delivered) -- and
+        # the cap was effectively unreachable before, since the old merge
+        # collapsed every follow-up into one slot instead of one entry each.
+        # So confirm the queue actually grew, and fall back to the merge when
+        # it did not. Merging is lossy; dropping is worse.
+        _busy_handler = getattr(self, "_busy_session_handler", None)
+        _runner = getattr(_busy_handler, "__self__", None)
+        _enqueue = getattr(_runner, "_queue_or_replace_pending_event", None)
+        _resolve = getattr(_runner, "_adapter_for_source", None)
+        _depth = getattr(_runner, "_queue_depth", None)
+        # The FIFO merges in place, and the queue does not grow, only when
+        # the occupant or this burst is a photo or already carries media
+        # URLs. The depth check below would read that as a decline and merge
+        # a second time, so those events stay on the historical path, which
+        # does the same caption merge. Every other occupant has to take the
+        # FIFO. A video, voice, or document with empty media_urls is not one
+        # of those in-place merges: the historical path replaces the slot and
+        # drops it, while reporting success. A missing PHOTO member must not
+        # be None either, or a slot whose message_type is None compares equal
+        # and takes that same drop.
+        _slot = self._pending_messages.get(session_key)
+        _photo = getattr(MessageType, "PHOTO", False)
+        _slot_is_media = _slot is not None and (
+            (_photo is not False and (
+                getattr(_slot, "message_type", None) == _photo
+                or getattr(state.event, "message_type", None) == _photo
+            ))
+            or bool(getattr(_slot, "media_urls", None))
+            or bool(getattr(state.event, "media_urls", None))
+        )
+        _target = None
+        if callable(_resolve) and not _slot_is_media:
+            try:
+                _target = _resolve(getattr(state.event, "source", None))
+            except Exception:
+                _target = None
+        # Delegate only when the runner routes this source back to THIS
+        # adapter: another adapter owns a different pending slot, and the
+        # drain that delivers this burst runs on ours. Declining to delegate
+        # costs the fix on exotic topologies; delegating blindly would risk
+        # the burst landing where nothing drains it.
+        if callable(_enqueue) and callable(_depth) and _target is self:
+            try:
+                _before = _depth(session_key, adapter=_target)
+                _enqueue(session_key, state.event)
+                if _depth(session_key, adapter=_target) > _before:
+                    return True
+                logger.warning(
+                    "[%s] FIFO declined the debounced burst for %s "
+                    "(pending cap reached?); falling back to pending-slot merge",
+                    self.name, session_key,
+                )
+            except Exception:
+                logger.warning(
+                    "[%s] FIFO enqueue of debounced burst failed for %s; "
+                    "falling back to pending-slot merge",
+                    self.name, session_key, exc_info=True,
+                )
+        if _senders_differ:
+            store[session_key] = state
+            return False
+        merge_pending_message_event(
+            self._pending_messages,
+            session_key,
+            state.event,
+            merge_text=True,
+        )
+        return True
+'''
+
+MEDIA_FIXED_NEW = '''        state = store.pop(session_key, None)
         if state is None:
             return False
         # Hand the flushed burst to the runner's FIFO so each follow-up gets
@@ -384,15 +491,23 @@ def recovery_path(upgrading):
 old = OLD.replace("\n", line_ending)
 new = NEW.replace("\n", line_ending)
 previous = PREVIOUS_NEW.replace("\n", line_ending)
+media_fixed = MEDIA_FIXED_NEW.replace("\n", line_ending)
+# The sender guard is the part of the unpatched tail that older injected
+# bodies left in place. An upgrade has to replace the guard and that body
+# together, or the guard still returns before the FIFO sees the burst.
+guard = old[:old.index("        state = store.pop(session_key, None)" + line_ending)]
+legacy_region = guard + previous
+media_region = guard + media_fixed
 old_count = src.count(old)
 new_count = src.count(new)
-previous_count = src.count(previous)
+legacy_count = src.count(legacy_region)
+media_count = src.count(media_region)
 upgrading = False
 if new_count:
-    if (new_count, old_count, previous_count) != (1, 0, 0):
+    if (new_count, old_count, legacy_count, media_count) != (1, 0, 0, 0):
         print(
-            "ABORT: malformed current install (patched=%d, unpatched=%d, previous=%d)"
-            % (new_count, old_count, previous_count)
+            "ABORT: malformed current install (patched=%d, unpatched=%d, legacy=%d, media=%d)"
+            % (new_count, old_count, legacy_count, media_count)
         ); sys.exit(2)
     try:
         parses(src)
@@ -401,21 +516,22 @@ if new_count:
     if not args.reverse:
         print("ALREADY_PATCHED"); sys.exit(0)
     out = src.replace(new, old, 1)
-elif previous_count:
-    if (previous_count, old_count) != (1, 0):
+elif legacy_count or media_count:
+    if (legacy_count, media_count, old_count) not in ((1, 0, 0), (0, 1, 0)):
         print(
-            "ABORT: malformed previous install (previous=%d, unpatched=%d)"
-            % (previous_count, old_count)
+            "ABORT: malformed previous install (legacy=%d, media=%d, unpatched=%d)"
+            % (legacy_count, media_count, old_count)
         ); sys.exit(2)
+    region = legacy_region if legacy_count else media_region
     try:
         parses(src)
     except (SyntaxError, ValueError) as error:
         print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
     if args.reverse:
-        out = src.replace(previous, old, 1)
+        out = src.replace(region, old, 1)
     else:
         upgrading = True
-        out = src.replace(previous, new, 1)
+        out = src.replace(region, new, 1)
 else:
     if old_count != 1:
         print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)

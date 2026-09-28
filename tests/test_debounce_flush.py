@@ -114,6 +114,9 @@ class Adapter:
         self._busy_session_handler = None if runner is None else (lambda event, key: False).__get__(runner)
         self.merges = 0
 
+    def _can_merge_text_debounce_events(self, existing, event):
+        return True
+
 
 def flush_of(adapter):
     namespace = {
@@ -121,7 +124,12 @@ def flush_of(adapter):
         "logger": logging.getLogger("debounce-flush-test"),
         "merge_pending_message_event": _counting_merge(adapter),
     }
-    exec("def _flush(self, store, session_key):\n" + load_new(), namespace)
+    # The real method binds ``state`` before the replaced tail.
+    exec(
+        "def _flush(self, store, session_key):\n"
+        "        state = store.get(session_key)\n" + load_new(),
+        namespace,
+    )
     return namespace["_flush"].__get__(adapter)
 
 
@@ -194,7 +202,11 @@ class DebounceFlushTests(unittest.TestCase):
             "logger": logging.getLogger("debounce-flush-test"),
             "merge_pending_message_event": _counting_merge(adapter),
         }
-        exec("def _flush(self, store, session_key):\n" + load_new(), namespace)
+        exec(
+            "def _flush(self, store, session_key):\n"
+            "        state = store.get(session_key)\n" + load_new(),
+            namespace,
+        )
         delivered = namespace["_flush"](adapter, {"session": type("State", (), {"event": burst})()}, "session")
 
         self.assertTrue(delivered)
@@ -206,7 +218,10 @@ class DebounceFlushTests(unittest.TestCase):
         previous = constants["PREVIOUS_NEW"]
         current = constants["NEW"]
         original = unpatched_source(constants, "OLD", "_queue_or_replace_pending_event")
-        installed = original.replace(constants["OLD"], previous, 1)
+        # Older injectors replaced only the pop/merge tail and left the sender
+        # guard above it. That is the install an upgrade has to recognize.
+        tail = constants["OLD"][constants["OLD"].index("        state = store.pop(session_key, None)\n"):]
+        installed = original.replace(tail, previous, 1)
         self.assertNotIn(current, installed)
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
@@ -244,6 +259,57 @@ class DebounceFlushTests(unittest.TestCase):
             )
             self.assertEqual(again.stdout.strip(), "ALREADY_PATCHED")
             self.assertEqual(upgrade_copy.read_text(encoding="utf-8"), installed)
+
+    def test_other_sender_is_offered_to_the_fifo_instead_of_staying_debounced(self):
+        # The sender guard sits above the replaced tail and returns before the
+        # FIFO is offered the burst. The timer was already cleared, so a second
+        # person's follow-up stays in the debounce store until they type again.
+        constants = string_constants(PATCH)
+        source = (
+            "import logging\n"
+            "logger = logging.getLogger('fixture')\n"
+            "class MessageType:\n"
+            "    TEXT = 'text'\n"
+            "    PHOTO = 'photo'\n"
+            "class Host:\n"
+            "    async def _flush_text_debounce_now(self, session_key):\n"
+            "        store = self._store\n"
+            "        state = store.get(session_key)\n"
+            "        if state is None:\n"
+            "            return False\n"
+            + constants["OLD"]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td)
+            target = directory / "base.py"
+            target.write_text(source, encoding="utf-8")
+            environment = {**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")}
+            applied = subprocess.run(
+                [sys.executable, str(PATCH), str(target)],
+                check=False, capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            namespace = {}
+            exec(target.read_text(encoding="utf-8"), namespace)
+            host = namespace["Host"]()
+            host.name = "fixture"
+            host._pending_messages = {}
+            host._store = {}
+            alice = Event("alice-question", namespace["MessageType"].TEXT)
+            bob = Event("bob-question", namespace["MessageType"].TEXT)
+            host._pending_messages["session"] = alice
+            host._store["session"] = type("State", (), {"event": bob})()
+            runner = Runner(host)
+            host._busy_session_handler = (lambda event, key: False).__get__(runner)
+            host._can_merge_text_debounce_events = lambda existing, event: False
+
+            import asyncio
+            delivered = asyncio.run(host._flush_text_debounce_now("session"))
+
+            self.assertTrue(delivered)
+            self.assertIs(host._pending_messages["session"], alice)
+            self.assertEqual([event.text for event in runner.overflow["session"]], ["bob-question"])
+            self.assertNotIn("session", host._store)
 
 
 if __name__ == "__main__":
