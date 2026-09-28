@@ -293,7 +293,17 @@ BLOCK = '''    # ---------------------------------------------------------------
         if re.search(r"(?m)^\\s*>", t):
             return False
         # Quote-replies and back-references are contextual by definition.
-        if cls._ovr_backref_re().search(t):
+        # "what's" is already an interrogative after the apostrophe is
+        # stripped, but this scan still sees the contraction, so "what's our"
+        # misses the same "what is our" pattern and runs cold. Expand only
+        # the wh-word form. "what's the difference" stays routable.
+        _backref = re.sub(
+            r"\\b(what|where|when|who|why|how)'s\\b",
+            r"\\1 is",
+            t,
+            flags=re.I,
+        )
+        if cls._ovr_backref_re().search(_backref):
             return False
         # Drop a leading gateway timestamp prefix ("[Thu 2026-07-23 16:58 +08]").
         # Matched on a bracketed group containing a 4-digit year so real text in

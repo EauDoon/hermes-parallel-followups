@@ -135,6 +135,11 @@ MUST_Q = [
     "why don't we set the timeout to thirty seconds",
     "should we wait for the quarterly print",
     "are we still using the old rate limit",
+    # Apostrophes are stripped for the opener list, so "what's" is an
+    # interrogative, but the back-reference scan still sees "what's our"
+    # rather than "what is our" and lets the question run cold.
+    "what's our timeout for the summary task right now",
+    "what’s my deadline for the summary task right now",
     # "you recommended" matches, but the grammatical form is "did you
     # recommend". A cold agent has no memory of what it recommended, decided,
     # or said, so these have to stay queued.
