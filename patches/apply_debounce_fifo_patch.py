@@ -297,11 +297,18 @@ NEW = '''        existing_pending = self._pending_messages.get(session_key)
         # costs the fix on exotic topologies; delegating blindly would risk
         # the burst landing where nothing drains it.
         if callable(_enqueue) and callable(_depth) and _target is self:
+            # Set only after enqueue returns. A later failure of the growth
+            # check means the FIFO may already hold the burst, so merging
+            # would deliver it twice. An exception from enqueue itself did
+            # not return, and still falls through to the merge.
+            _handed_off = False
             try:
                 _before = _depth(session_key, adapter=_target)
                 _enqueue(session_key, state.event)
+                _handed_off = True
                 if _depth(session_key, adapter=_target) > _before:
                     return True
+                _handed_off = False
                 # The warning is not the fallback. A broken sink must not
                 # skip the merge below: the burst has already left the store.
                 try:
@@ -313,6 +320,17 @@ NEW = '''        existing_pending = self._pending_messages.get(session_key)
                 except Exception:
                     pass
             except Exception:
+                if _handed_off:
+                    try:
+                        logger.warning(
+                            "[%s] FIFO accepted the debounced burst for %s "
+                            "but the queue depth could not be re-read; "
+                            "not merging it again",
+                            self.name, session_key, exc_info=True,
+                        )
+                    except Exception:
+                        pass
+                    return True
                 try:
                     logger.warning(
                         "[%s] FIFO enqueue of debounced burst failed for %s; "
