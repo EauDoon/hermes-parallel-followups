@@ -621,6 +621,12 @@ elif legacy_count or media_count:
             % (legacy_count, media_count, old_count)
         ); sys.exit(2)
     region = legacy_region if legacy_count else media_region
+    # A fresh install already requires the anchor to sit inside the flush
+    # method. An upgrade only counted the older body, so a copy in another
+    # method was rewritten and the real flush was left alone.
+    site = flush_site(src)
+    if site is None or not site[0] <= src.index(region) < site[1]:
+        print("ABORT: the flush site is not inside _flush_text_debounce_now"); sys.exit(2)
     try:
         parses(src)
     except (SyntaxError, ValueError) as error:

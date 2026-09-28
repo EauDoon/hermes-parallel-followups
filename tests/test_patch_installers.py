@@ -773,6 +773,47 @@ class PatchInstallerTests(unittest.TestCase):
                         self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
                         assert_no_staging_residue(self, directory, target)
 
+    def test_debounce_upgrade_refuses_an_older_body_outside_the_flush_method(self):
+        # A fresh install checks that the anchor sits inside
+        # _flush_text_debounce_now. An upgrade of the previous flush body
+        # only counted the text, so the same body in another method was
+        # rewritten and the real flush was left alone.
+        script = ROOT / "patches" / "apply_debounce_fifo_patch.py"
+        constants = string_constants(script)
+        original = unpatched_source(constants, "OLD", "_queue_or_replace_pending_event")
+        head = original[:original.index("    async def _flush_text_debounce_now")]
+        guard = constants["OLD"][:constants["OLD"].index("        state = store.pop(session_key, None)\n")]
+        cases = {
+            "legacy-body": constants["PREVIOUS_NEW"],
+            "media-body": constants["MEDIA_FIXED_NEW"],
+        }
+        for name, previous in cases.items():
+            source = (
+                head
+                + "    def other_helper(self, store, session_key):\n"
+                + "        state = store.get(session_key)\n"
+                + guard
+                + previous
+                + "\n    async def _flush_text_debounce_now(self, session_key):\n"
+                + "        return False\n"
+            )
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                target = directory / "target.py"
+                saved = source.encode("utf-8")
+                for options in ((), ("--check",), ("--reverse",), ("--reverse", "--check")):
+                    target.write_bytes(saved)
+                    with self.subTest(case=name, options=options):
+                        result = self.run_installer(script, target, directory, *options)
+                        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                        self.assertIn(
+                            "the flush site is not inside _flush_text_debounce_now",
+                            result.stdout,
+                        )
+                        self.assertEqual(target.read_bytes(), saved)
+                        self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
+                        assert_no_staging_residue(self, directory, target)
+
     def test_one_line_upstream_drift_aborts_instead_of_half_applying(self):
         # The most common way a patch repo breaks is upstream editing one line
         # inside the anchor. The target is then 95% identical and still
