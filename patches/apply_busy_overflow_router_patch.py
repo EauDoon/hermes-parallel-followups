@@ -239,6 +239,11 @@ BLOCK = '''    # ---------------------------------------------------------------
             # would capture "tell me about X", which is self-contained.
             rx = re.compile(
                 r"\\(\\s*\\d+\\s*\\)"
+                # "(b)" is the same kind of list reference as "(2)". A capital
+                # "option B" is a label; lowercase "option a family" is not,
+                # so the letter class is case-sensitive.
+                r"|\\(\\s*[a-d]\\s*\\)"
+                r"|\\b(?:option|point|part|step)\\s+(?-i:[A-D])\\b"
                 r"|\\boption\\s*\\d"
                 r"|\\bpoint\\s*\\d"
                 r"|\\bpart\\s*\\d"
