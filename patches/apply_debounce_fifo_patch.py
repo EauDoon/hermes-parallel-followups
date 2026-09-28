@@ -138,7 +138,7 @@ OLD = """        state = store.pop(session_key, None)
         return True
 """
 
-NEW = '''        state = store.pop(session_key, None)
+PREVIOUS_NEW = '''        state = store.pop(session_key, None)
         if state is None:
             return False
         # Hand the flushed burst to the runner's FIFO so each follow-up gets
@@ -180,6 +180,92 @@ NEW = '''        state = store.pop(session_key, None)
         # with a default keeps the patch forward-compatible with Hermeses
         # that do not yet define the newer members.
         _slot_is_media = _slot is not None and (getattr(_slot, "message_type", None) in (getattr(MessageType, "PHOTO", None), getattr(MessageType, "VIDEO", None), getattr(MessageType, "AUDIO", None), getattr(MessageType, "DOCUMENT", None), getattr(MessageType, "VOICE", None), getattr(MessageType, "STICKER", None), getattr(MessageType, "ANIMATION", None), getattr(MessageType, "VIDEO_NOTE", None)) or bool(getattr(_slot, "media_urls", None)))
+        _target = None
+        if callable(_resolve) and not _slot_is_media:
+            try:
+                _target = _resolve(getattr(state.event, "source", None))
+            except Exception:
+                _target = None
+        # Delegate only when the runner routes this source back to THIS
+        # adapter: another adapter owns a different pending slot, and the
+        # drain that delivers this burst runs on ours. Declining to delegate
+        # costs the fix on exotic topologies; delegating blindly would risk
+        # the burst landing where nothing drains it.
+        if callable(_enqueue) and callable(_depth) and _target is self:
+            try:
+                _before = _depth(session_key, adapter=_target)
+                _enqueue(session_key, state.event)
+                if _depth(session_key, adapter=_target) > _before:
+                    return True
+                logger.warning(
+                    "[%s] FIFO declined the debounced burst for %s "
+                    "(pending cap reached?); falling back to pending-slot merge",
+                    self.name, session_key,
+                )
+            except Exception:
+                logger.warning(
+                    "[%s] FIFO enqueue of debounced burst failed for %s; "
+                    "falling back to pending-slot merge",
+                    self.name, session_key, exc_info=True,
+                )
+        merge_pending_message_event(
+            self._pending_messages,
+            session_key,
+            state.event,
+            merge_text=True,
+        )
+        return True
+'''
+
+NEW = '''        state = store.pop(session_key, None)
+        if state is None:
+            return False
+        # Hand the flushed burst to the runner's FIFO so each follow-up gets
+        # its OWN turn in arrival order. The historical
+        # call below newline-merged it into the single pending slot with no
+        # time bound, so everything sent during a long turn arrived as one
+        # mashed-together turn -- the #43066 sub-bug, fixed for interrupt /
+        # steer-fallback / /queue but never for this path.
+        #
+        # The runner is reachable through the bound busy-session handler it
+        # already installed on this adapter, so no extra wiring is required.
+        # Photo/album merge semantics are preserved inside
+        # _queue_or_replace_pending_event itself.
+        #
+        # ``_queue_or_replace_pending_event`` can DECLINE silently: it returns
+        # without queueing and without raising when the source resolves to no
+        # adapter, or when the per-session pending cap is reached. Treating the
+        # call as success there would DROP the burst, where the historical
+        # merge would still have delivered it (mashed, but delivered) -- and
+        # the cap was effectively unreachable before, since the old merge
+        # collapsed every follow-up into one slot instead of one entry each.
+        # So confirm the queue actually grew, and fall back to the merge when
+        # it did not. Merging is lossy; dropping is worse.
+        _busy_handler = getattr(self, "_busy_session_handler", None)
+        _runner = getattr(_busy_handler, "__self__", None)
+        _enqueue = getattr(_runner, "_queue_or_replace_pending_event", None)
+        _resolve = getattr(_runner, "_adapter_for_source", None)
+        _depth = getattr(_runner, "_queue_depth", None)
+        # The FIFO merges in place, and the queue does not grow, only when
+        # the occupant or this burst is a photo or already carries media
+        # URLs. The depth check below would read that as a decline and merge
+        # a second time, so those events stay on the historical path, which
+        # does the same caption merge. Every other occupant has to take the
+        # FIFO. A video, voice, or document with empty media_urls is not one
+        # of those in-place merges: the historical path replaces the slot and
+        # drops it, while reporting success. A missing PHOTO member must not
+        # be None either, or a slot whose message_type is None compares equal
+        # and takes that same drop.
+        _slot = self._pending_messages.get(session_key)
+        _photo = getattr(MessageType, "PHOTO", False)
+        _slot_is_media = _slot is not None and (
+            (_photo is not False and (
+                getattr(_slot, "message_type", None) == _photo
+                or getattr(state.event, "message_type", None) == _photo
+            ))
+            or bool(getattr(_slot, "media_urls", None))
+            or bool(getattr(state.event, "media_urls", None))
+        )
         _target = None
         if callable(_resolve) and not _slot_is_media:
             try:
@@ -268,15 +354,45 @@ for required in ("logger", "MessageType"):
     if not bound(src, required):
         print("ABORT: base-platform symbol %r is not defined or imported" % required); sys.exit(2)
 
+def recovery_path(upgrading):
+    """Backup path the write uses.
+
+    A fresh install and a reverse keep the names they already used. Upgrading
+    a previously injected flush body has to leave the original recovery copy
+    alone, or the never-overwrite rule aborts the only write that installs
+    the corrected body.
+    """
+    path = PATH + ".bak-pre-debouncefifo" + (".reverse" if args.reverse else "")
+    if not upgrading:
+        return path
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return path
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("existing recovery backup is not a regular file")
+    for ordinal in range(1, 9):
+        slot = path + ".upgrade" if ordinal == 1 else "%s.upgrade.%d" % (path, ordinal)
+        if not os.path.lexists(slot):
+            return slot
+    raise OSError(
+        "no free upgrade recovery slot beside %s; preserve or relocate "
+        "them before retrying" % path
+    )
+
+
 old = OLD.replace("\n", line_ending)
 new = NEW.replace("\n", line_ending)
+previous = PREVIOUS_NEW.replace("\n", line_ending)
 old_count = src.count(old)
 new_count = src.count(new)
+previous_count = src.count(previous)
+upgrading = False
 if new_count:
-    if (new_count, old_count) != (1, 0):
+    if (new_count, old_count, previous_count) != (1, 0, 0):
         print(
-            "ABORT: malformed current install (patched=%d, unpatched=%d)"
-            % (new_count, old_count)
+            "ABORT: malformed current install (patched=%d, unpatched=%d, previous=%d)"
+            % (new_count, old_count, previous_count)
         ); sys.exit(2)
     try:
         parses(src)
@@ -285,6 +401,21 @@ if new_count:
     if not args.reverse:
         print("ALREADY_PATCHED"); sys.exit(0)
     out = src.replace(new, old, 1)
+elif previous_count:
+    if (previous_count, old_count) != (1, 0):
+        print(
+            "ABORT: malformed previous install (previous=%d, unpatched=%d)"
+            % (previous_count, old_count)
+        ); sys.exit(2)
+    try:
+        parses(src)
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
+    if args.reverse:
+        out = src.replace(previous, old, 1)
+    else:
+        upgrading = True
+        out = src.replace(previous, new, 1)
 else:
     if old_count != 1:
         print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
@@ -303,15 +434,12 @@ if args.check:
     # The recovery copy is the one precondition an apply can reach after this
     # point, so a verdict that ignored it would approve a write that aborts.
     try:
-        conflict = recovery_copy_conflict(
-            PATH + ".bak-pre-debouncefifo" + (".reverse" if args.reverse else ""),
-            src.encode("utf-8"),
-        )
+        conflict = recovery_copy_conflict(recovery_path(upgrading), src.encode("utf-8"))
     except OSError as error:
         print("ABORT: the recovery copy blocks this write; target unchanged:\n", error); sys.exit(3)
     if conflict:
         print("ABORT: the recovery copy blocks this write; target unchanged:\n", conflict); sys.exit(3)
-    print("REVERSIBLE" if args.reverse else "APPLICABLE"); sys.exit(0)
+    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if upgrading else "APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None
 try:
@@ -330,7 +458,7 @@ try:
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
     guard_target()
     write_backup_exclusive(
-        PATH + ".bak-pre-debouncefifo" + (".reverse" if args.reverse else ""),
+        recovery_path(upgrading),
         src.encode("utf-8"),
         st.st_mode,
     )
