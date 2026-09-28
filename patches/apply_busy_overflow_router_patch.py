@@ -252,6 +252,12 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\byou\\s+(mean|meant|meaning)\\b"
                 r"|\\b(?:we|us|our|my)\\s+(?:agreed?|decided?|discussed?|chose|chosen|picked|settled|wanted|want|needed|need|think|thought|believe|assumed?|planned?|proposed|concluded|found|noted|asked?|said|say|meant?|meaning|intended?|should|would|could|must|will|can)\\b"
                 r"|\\b(?:what|how|why|which|where|when|who)\\s+(?:did|do|does|are|is|was|were|should|would|could|have|has)\\s+(?:we|us|our|my)\\b"
+                # "which model did we pick" puts words between the wh-word and
+                # the auxiliary, and "why don't we" contracts it. "should we"
+                # inverts them. "us" stays out of these looser forms so the
+                # country is not read as the pronoun.
+                r"|\\b(?:what|how|why|which|where|when|who)\\b(?:\\s+(?!we\\b|us\\b|our\\b|my\\b)\\w+){0,4}\\s+(?:did|do|does|are|is|was|were|should|would|could|have|has|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|hasn't|hasnt|isn't|isnt|aren't|arent|wasn't|wasnt|weren't|werent|shouldn't|shouldnt|wouldn't|wouldnt|couldn't|couldnt|can't|cant|won't|wont)\\s+(?:we|our|my)\\b"
+                r"|\\b(?:should|would|could|can|do|does|did|are|is|was|were|have|has|will|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|isn't|isnt|aren't|arent|can't|cant|won't|wont)\\s+(?:we|our|my)\\b"
                 r"|\\b(above|earlier|previous|previously)\\b"
                 r"|\\bthe\\s+(?:former|latter)\\b"
                 r"|\\blast\\s+(one|answer|reply|message|point)\\b"
