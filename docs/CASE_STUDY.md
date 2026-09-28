@@ -49,6 +49,7 @@ The boundary fix keeps delivery as the priority when the FIFO cannot safely acce
 | Situation | Behavior | Cost |
 | --- | --- | --- |
 | No runner, unresolved adapter, or different adapter owns the source | Use the historical pending-slot merge | The text is delivered, but boundaries can merge. |
+| A different sender already holds the pending slot | Give the burst its own FIFO turn | Merging would put two people in one turn. If the FIFO cannot take the burst, it stays in the debounce store instead of being merged. |
 | The pending slot or the burst is a photo, or already has media URLs | Preserve the historical caption merge | That is the in-place merge the FIFO would do, and it does not grow the queue. A video, voice, or document with no media URLs stays on the FIFO, because the historical merge would replace the slot and drop it. |
 | The FIFO reaches its 32-event pending cap or declines silently | Use the historical merge | Delivery is preserved, but strict separation and ordering can be lost at capacity. |
 | Two taps arrive inside the debounce window | Keep them in one burst | This intentionally treats a split thought as one turn. |
