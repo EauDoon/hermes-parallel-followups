@@ -19,7 +19,7 @@ Gated by display.busy_overflow_background:
 Idempotent, backed up, syntax-checked.
 Usage: apply_busy_overflow_router_patch.py [/opt/hermes/gateway/run.py]
 """
-import sys, py_compile, os, stat, tempfile, argparse
+import ast, sys, py_compile, os, stat, tempfile, argparse
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py")
@@ -476,23 +476,58 @@ block_marker = target_text(BLOCK_MARKER)
 block = target_text(BLOCK)
 anchor = target_text(ANCHOR)
 
-# Preconditions: required module imports must already exist at top level.
-for name in ("re", "os", "time", "asyncio"):
-    need = line_ending + "import " + name + line_ending
-    if need not in src:
-        print("ABORT: missing top-level import %r" % ("import " + name)); sys.exit(2)
+def _router_binds(body, name):
+    """True when ``name`` is bound by these module-level statements.
 
-# Preconditions: gateway runtime config loader and cfg_get must be reachable as
-# top-level names in the target file. Without this, the patched method calls
-# NameError, which the surrounding `except Exception: return "off"` swallows,
-# silently disabling the router instead of reporting a hard install failure.
-import re as _re
-for required in ("_load_gateway_runtime_config", "cfg_get"):
-    pattern_defined = _re.compile(rf"^def {required}\b", _re.MULTILINE)
-    pattern_from_import = _re.compile(rf"^from\s+\S+\s+import\s+[^\n]*\b{required}\b", _re.MULTILINE)
-    pattern_plain_import = _re.compile(rf"^import\s+{required}\b", _re.MULTILINE)
-    if not (pattern_defined.search(src) or pattern_from_import.search(src) or pattern_plain_import.search(src)):
-        print("ABORT: gateway runtime symbol %r is not defined or imported at top level" % required); sys.exit(2)
+    A docstring, a comment, and an import alias do not bind it. A combined
+    import and a parenthesized import do. Function and class bodies are not
+    module scope.
+    """
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                return True
+            continue
+        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith)):
+            if _router_binds(node.body, name) or _router_binds(node.orelse, name):
+                return True
+            continue
+        if isinstance(node, ast.Try):
+            parts = [node.body, node.orelse, node.finalbody]
+            parts.extend(handler.body for handler in node.handlers)
+            if any(_router_binds(part, name) for part in parts):
+                return True
+            continue
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return True
+            continue
+        if isinstance(node, ast.AnnAssign) and node.value is not None and isinstance(node.target, ast.Name) and node.target.id == name:
+            return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if (alias.asname or alias.name.split(".")[0]) == name:
+                    return True
+    return False
+
+
+# Preconditions: the injected router calls these names at runtime. A missing
+# one is a NameError. For cfg_get and the config loader, the method catches
+# Exception and returns "off", so the router silently disables. A docstring
+# or a comment that merely contains the import text is not a binding, and an
+# alias binds the other name.
+try:
+    _router_tree = ast.parse(src)
+except SyntaxError:
+    _router_tree = None
+if _router_tree is not None:
+    for required in ("re", "os", "time", "asyncio"):
+        if not _router_binds(_router_tree.body, required):
+            print("ABORT: missing top-level import %r" % ("import " + required)); sys.exit(2)
+    for required in ("_load_gateway_runtime_config", "cfg_get"):
+        if not _router_binds(_router_tree.body, required):
+            print("ABORT: gateway runtime symbol %r is not defined or imported at top level" % required); sys.exit(2)
 
 block_count = src.count(block)
 marker_count = src.count(block_marker)
