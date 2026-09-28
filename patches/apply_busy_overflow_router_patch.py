@@ -437,6 +437,14 @@ BLOCK = '''    # ---------------------------------------------------------------
         import secrets
         task_id = "bg_ovr_%d_%s" % (int(time.time()), secrets.token_hex(16))
         anchor = self._reply_anchor_for_event(event)
+        # Log before the task exists. The busy handler's caller queues the
+        # event when this method raises, and the handler's own except also
+        # logs. A NameError from logger.info after create_task therefore
+        # runs the follow-up in the background and in the foreground queue.
+        logger.info(
+            "Busy-overflow routed to background: session=%s mode=%s task=%s len=%d",
+            session_key, mode, task_id, len(text),
+        )
         # Once owned by the background registry, the caller returns without
         # an await. Ack cancellation cannot make an already dispatched event
         # fall back into the foreground queue and run twice.
@@ -449,10 +457,6 @@ BLOCK = '''    # ---------------------------------------------------------------
         self._background_tasks.add(task)
         active[task] = session_key
         task.add_done_callback(self._overflow_router_done)
-        logger.info(
-            "Busy-overflow routed to background: session=%s mode=%s task=%s len=%d",
-            session_key, mode, task_id, len(text),
-        )
         return True
 
 '''
@@ -488,7 +492,11 @@ def _router_binds(body, name):
             if node.name == name:
                 return True
             continue
-        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith)):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            if _router_binds(node.body, name):
+                return True
+            continue
+        if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While)):
             if _router_binds(node.body, name) or _router_binds(node.orelse, name):
                 return True
             continue
@@ -525,7 +533,7 @@ if _router_tree is not None:
     for required in ("re", "os", "time", "asyncio"):
         if not _router_binds(_router_tree.body, required):
             print("ABORT: missing top-level import %r" % ("import " + required)); sys.exit(2)
-    for required in ("_load_gateway_runtime_config", "cfg_get"):
+    for required in ("_load_gateway_runtime_config", "cfg_get", "logger"):
         if not _router_binds(_router_tree.body, required):
             print("ABORT: gateway runtime symbol %r is not defined or imported at top level" % required); sys.exit(2)
 
