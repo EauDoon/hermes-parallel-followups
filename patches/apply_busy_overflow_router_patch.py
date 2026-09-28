@@ -271,7 +271,9 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\b(?:should|would|could|can|do|does|did|are|is|was|were|have|has|will|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|isn't|isnt|aren't|arent|can't|cant|won't|wont)\\s+(?:we|our|my)\\b"
                 r"|\\b(above|earlier|previous|previously)\\b"
                 r"|\\bthe\\s+(?:former|latter)\\b"
-                r"|\\blast\\s+(one|answer|reply|message|point)\\b"
+                # "the last answer" was queued. "the first answer" and "the
+                # second reply" name the same turn and were not.
+                r"|\\b(?:first|second|third|next|last)\\s+(?:one|answer|reply|message|point)\\b"
                 r"|\\b(what|how)\\s+about\\b"
                 r"|\\balso\\b"
                 r"|^\\s*\\[replying\\s+to",
