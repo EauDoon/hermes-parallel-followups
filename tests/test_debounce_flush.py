@@ -353,6 +353,36 @@ class DebounceFlushTests(unittest.TestCase):
                 self.assertEqual(occupant.text, "first\nsecond question about the capital")
                 self.assertEqual(adapter.merges, 1)
 
+    def test_depth_check_after_a_successful_enqueue_does_not_merge_again(self):
+        # The growth check is how a silent decline is told from a stored
+        # burst. If that read raises after the FIFO has already accepted the
+        # event, the except path used to merge it into the pending slot too.
+        adapter = Adapter()
+        runner = Runner(adapter)
+        adapter._busy_session_handler = (lambda event, key: False).__get__(runner)
+        calls = {"n": 0}
+
+        def depth(key, adapter=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return 1
+            raise RuntimeError("depth unreadable")
+
+        def enqueue(key, event):
+            runner.overflow.setdefault(key, []).append(event)
+
+        runner._queue_depth = depth
+        runner._queue_or_replace_pending_event = enqueue
+        occupant = Event("first", MessageType.TEXT)
+        adapter._pending_messages["session"] = occupant
+        burst = Event("second question about the capital", MessageType.TEXT)
+        delivered = flush_of(adapter)({"session": type("State", (), {"event": burst})()}, "session")
+
+        self.assertTrue(delivered)
+        self.assertEqual(occupant.text, "first")
+        self.assertEqual(adapter.merges, 0)
+        self.assertEqual([event.text for event in runner.overflow["session"]], [burst.text])
+
 
 if __name__ == "__main__":
     unittest.main()
