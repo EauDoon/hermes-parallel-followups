@@ -712,10 +712,15 @@ class PatchInstallerTests(unittest.TestCase):
         constants = string_constants(script)
         prefix = unpatched_source(constants, "OLD", "_queue_or_replace_pending_event")
         head = prefix[:prefix.index("    async def _flush_text_debounce_now")]
+        # The flush method is the last one in the class. A later copy of the
+        # anchor is not inside it, even though no same-indent def closes the
+        # span. The installer used to rewrite that copy.
         cases = {
             "block-elsewhere": head + "    def other_helper(self, store, session_key):\n"
                            + constants["OLD"] + "\n    async def _flush_text_debounce_now(self, session_key):\n        return False\n",
             "method-renamed": prefix.replace("_flush_text_debounce_now", "_flush_text_debounce", 1),
+            "nested-class-after-flush": head + "    async def _flush_text_debounce_now(self, session_key):\n        return False\n\n    class Nested:\n        def stash(self, store, session_key):\n" + constants["OLD"],
+            "module-function-after-flush": head + "    async def _flush_text_debounce_now(self, session_key):\n        return False\n\ndef later(store, session_key):\n" + constants["OLD"],
         }
 
         for name, source in cases.items():
