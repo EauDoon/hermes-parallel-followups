@@ -311,6 +311,48 @@ class DebounceFlushTests(unittest.TestCase):
             self.assertEqual([event.text for event in runner.overflow["session"]], ["bob-question"])
             self.assertNotIn("session", host._store)
 
+    def test_logging_failure_still_falls_back_to_the_pending_merge(self):
+        # The warning sits inside the try that guards the FIFO call. When the
+        # sink raises, that exception used to leave the method before the
+        # historical merge, and the burst was already gone from the store.
+        class RaisingLogger:
+            def warning(self, *args, **kwargs):
+                raise RuntimeError("log sink failed")
+
+        def flush(enqueue):
+            adapter = Adapter()
+            runner = Runner(adapter)
+            adapter._busy_session_handler = (lambda event, key: False).__get__(runner)
+            runner._queue_or_replace_pending_event = enqueue
+            occupant = Event("first", MessageType.TEXT)
+            adapter._pending_messages["session"] = occupant
+            burst = Event("second question about the capital", MessageType.TEXT)
+            namespace = {
+                "MessageType": MessageType,
+                "logger": RaisingLogger(),
+                "merge_pending_message_event": _counting_merge(adapter),
+            }
+            exec(
+                "def _flush(self, store, session_key):\n"
+                "        state = store.get(session_key)\n" + load_new(),
+                namespace,
+            )
+            delivered = namespace["_flush"](
+                adapter, {"session": type("State", (), {"event": burst})()}, "session",
+            )
+            return delivered, occupant, adapter
+
+        cases = {
+            "declined": lambda key, event: None,
+            "enqueue-raised": lambda key, event: (_ for _ in ()).throw(RuntimeError("fifo down")),
+        }
+        for name, enqueue in cases.items():
+            with self.subTest(case=name):
+                delivered, occupant, adapter = flush(enqueue)
+                self.assertTrue(delivered)
+                self.assertEqual(occupant.text, "first\nsecond question about the capital")
+                self.assertEqual(adapter.merges, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -302,17 +302,25 @@ NEW = '''        existing_pending = self._pending_messages.get(session_key)
                 _enqueue(session_key, state.event)
                 if _depth(session_key, adapter=_target) > _before:
                     return True
-                logger.warning(
-                    "[%s] FIFO declined the debounced burst for %s "
-                    "(pending cap reached?); falling back to pending-slot merge",
-                    self.name, session_key,
-                )
+                # The warning is not the fallback. A broken sink must not
+                # skip the merge below: the burst has already left the store.
+                try:
+                    logger.warning(
+                        "[%s] FIFO declined the debounced burst for %s "
+                        "(pending cap reached?); falling back to pending-slot merge",
+                        self.name, session_key,
+                    )
+                except Exception:
+                    pass
             except Exception:
-                logger.warning(
-                    "[%s] FIFO enqueue of debounced burst failed for %s; "
-                    "falling back to pending-slot merge",
-                    self.name, session_key, exc_info=True,
-                )
+                try:
+                    logger.warning(
+                        "[%s] FIFO enqueue of debounced burst failed for %s; "
+                        "falling back to pending-slot merge",
+                        self.name, session_key, exc_info=True,
+                    )
+                except Exception:
+                    pass
         if _senders_differ:
             store[session_key] = state
             return False
