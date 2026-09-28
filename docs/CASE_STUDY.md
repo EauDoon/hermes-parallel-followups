@@ -49,7 +49,7 @@ The boundary fix keeps delivery as the priority when the FIFO cannot safely acce
 | Situation | Behavior | Cost |
 | --- | --- | --- |
 | No runner, unresolved adapter, or different adapter owns the source | Use the historical pending-slot merge | The text is delivered, but boundaries can merge. |
-| A media event occupies the pending slot | Preserve the historical caption merge | Media semantics take priority over separate text turns. |
+| The pending slot or the burst is a photo, or already has media URLs | Preserve the historical caption merge | That is the in-place merge the FIFO would do, and it does not grow the queue. A video, voice, or document with no media URLs stays on the FIFO, because the historical merge would replace the slot and drop it. |
 | The FIFO reaches its 32-event pending cap or declines silently | Use the historical merge | Delivery is preserved, but strict separation and ordering can be lost at capacity. |
 | Two taps arrive inside the debounce window | Keep them in one burst | This intentionally treats a split thought as one turn. |
 
@@ -113,7 +113,7 @@ Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResea
 
 Both installers are standalone and idempotent. They require exact source anchors, refuse symlinks and non-regular targets, stage and compile before replacement, detect target changes, and use atomic replacement. `--check` is read-only. A failed staging, compile, recovery, or target-change check leaves the target unchanged.
 
-Before applying or reversing, stop the gateway and other writers of the target files. Backups stay beside the originals as `*.bak-pre-debouncefifo` and `*.bak-pre-overflowrouter`; existing backups are not overwritten. A matching recovery copy can be reused after reverse and reapply. Router upgrades retain the prior installed source in `.upgrade`, and reversal retains the patched source in `.reverse`. Reverse only the exact current patch and restart the gateway afterwards.
+Before applying or reversing, stop the gateway and other writers of the target files. Backups stay beside the originals as `*.bak-pre-debouncefifo` and `*.bak-pre-overflowrouter`; existing backups are not overwritten. A matching recovery copy can be reused after reverse and reapply. Router upgrades retain the prior installed source in `.upgrade`, and a debounce flush-body upgrade does the same beside its own backup. Reversal retains the patched source in `.reverse`. Reverse only the exact current patch and restart the gateway afterwards.
 
 The full commands and exit-code meanings are in the [README](../README.md). The source and installer behavior remain version-specific by design.
 
