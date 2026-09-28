@@ -71,6 +71,9 @@ MUST_BG = [
     # routable.
     "what is the trade deficit of the US compared with Japan",
     "tell me about the population of Reykjavik",
+    # "did you recommend" is a back-reference. A request to recommend
+    # something new is self-contained and must stay routable.
+    "can you recommend a city with reliable winter transit",
     # A newline is ordinary text. Backspace and DEL are not, and are covered
     # with the queued cases below.
     "what is the population of Ulaanbaatar today\nand why does the census matter for planning",
@@ -132,6 +135,12 @@ MUST_Q = [
     "why don't we set the timeout to thirty seconds",
     "should we wait for the quarterly print",
     "are we still using the old rate limit",
+    # "you recommended" matches, but the grammatical form is "did you
+    # recommend". A cold agent has no memory of what it recommended, decided,
+    # or said, so these have to stay queued.
+    "why did you recommend the smaller model for the summary task",
+    "what did you decide about the timeout configuration",
+    "what did you say about monetary policy in the seventies",
 ]
 
 fails = []
