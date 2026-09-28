@@ -72,6 +72,7 @@ MUST_BG = [
     "what is the trade deficit of the US compared with Japan",
     "tell me about the population of Reykjavik",
     "what is the best option a family has for heating a home in winter",
+    "what is the first city to exceed ten million people",
     # "did you recommend" is a back-reference. A request to recommend
     # something new is self-contained and must stay routable.
     "can you recommend a city with reliable winter transit",
@@ -126,6 +127,11 @@ MUST_Q = [
     # background agent starts with no history, so it cannot tell which of two
     # previously offered options is meant.
     "how does the former compare to the latter",
+    # "the last answer" is queued. "the first answer" and "the second reply"
+    # are the same back-reference and were backgrounded. "the first city"
+    # below stays routable: the noun is what makes it a turn reference.
+    "what was the first answer about inflation targets today",
+    "what was the second reply about inflation targets today",
     "which of the latter two options is cheaper to run",
     # Deliberate residual, in the same class as "the previous champions": a
     # phrase match cannot tell the pronoun from the adjective, and this
