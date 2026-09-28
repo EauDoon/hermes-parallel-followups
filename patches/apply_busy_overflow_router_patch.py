@@ -96,7 +96,7 @@ def write_backup_exclusive(path, contents, mode):
             raise OSError("existing recovery backup is not a regular file")
         if checked_read(path) != contents:
             raise OSError("existing recovery backup differs; preserve or relocate it before retrying")
-        return  # An exact recovery copy already exists after reverse/reapply.
+        return False  # An exact recovery copy already exists after reverse/reapply.
     try:
         with os.fdopen(descriptor, "wb") as backup:
             descriptor = -1
@@ -113,6 +113,7 @@ def write_backup_exclusive(path, contents, mode):
         except FileNotFoundError:
             pass
         raise
+    return True
 
 try:
     st = os.lstat(PATH)
@@ -640,7 +641,8 @@ if args.check:
         print("ABORT: target directory is not writable; the install cannot create its temporary file:\n", parent); sys.exit(3)
     print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
 
-candidate = bytecode = None
+candidate = bytecode = backup_path = None
+created_backup = False
 try:
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", newline="", delete=False,
@@ -656,14 +658,17 @@ try:
     bytecode = candidate + ".pyc"
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
     guard_target()
-    write_backup_exclusive(
-        recovery_path(),
-        src.encode("utf-8"),
-        st.st_mode,
-    )
+    backup_path = recovery_path()
+    created_backup = write_backup_exclusive(backup_path, src.encode("utf-8"), st.st_mode)
     guard_target()
     os.replace(candidate, PATH)
+    created_backup = False
 except (py_compile.PyCompileError, OSError) as e:
+    if created_backup and backup_path:
+        try:
+            os.unlink(backup_path)
+        except FileNotFoundError:
+            pass
     print("ABORT: staged write or compile check failed; target unchanged:\n", e); sys.exit(3)
 finally:
     for temporary in (candidate, bytecode):
