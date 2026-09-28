@@ -145,6 +145,24 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("RuntimeError", logs.output[0])
         self.assertFalse(self.runner._overflow_router_tasks)
 
+    async def test_registration_failure_cancels_the_task_and_does_not_generate(self):
+        # create_task schedules the follow-up before it is recorded. If
+        # registering it then raises, the caller queues the event too, and
+        # the orphan keeps running.
+        class Exploding(set):
+            def add(self, item):
+                raise RuntimeError("registry full")
+
+        self.runner._background_tasks = Exploding()
+        with self.assertRaises(RuntimeError):
+            await self.runner._maybe_route_overflow_to_background(event(), "session")
+        pending = asyncio.all_tasks() - {asyncio.current_task()}
+        if pending:
+            await asyncio.wait(pending, timeout=0.5)
+        self.assertFalse(self.runner.prompts)
+        self.assertFalse(self.runner._overflow_router_tasks)
+        self.assertFalse(self.runner._background_tasks)
+
     async def test_task_factory_failure_leaves_no_owned_work(self):
         with patch("asyncio.create_task", side_effect=RuntimeError("closed")):
             with self.assertRaises(RuntimeError):
