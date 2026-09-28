@@ -64,6 +64,26 @@ def parses(text):
     return compile(text.encode("utf-8"), PATH, "exec")
 
 
+def recovery_copy_conflict(path, contents):
+    """Why the recovery copy at ``path`` makes the write abort, or None.
+
+    Mirrors the O_EXCL branch of write_backup_exclusive so --check predicts
+    the apply instead of approving a write that then fails, and names the same
+    reason. Deliberately not shared with that branch: a path that disappears
+    between the O_EXCL failure and the lstat there is a hard write abort, while
+    here it simply means the copy does not exist yet and the write will make it.
+    """
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return "existing recovery backup is not a regular file"
+    if checked_read(path) != contents:
+        return "existing recovery backup differs; preserve or relocate it before retrying"
+    return None
+
+
 def write_backup_exclusive(path, contents, mode):
     """Create a recovery copy without following or replacing an existing path."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -478,6 +498,27 @@ block_count = src.count(block)
 marker_count = src.count(block_marker)
 hook_new_count = src.count(hook_new)
 anchor_count = src.count(anchor)
+
+
+def recovery_path():
+    """Backup path the write uses, chosen by exactly the rule it writes under.
+
+    An upgrade has to keep the copy taken by the first install, so it takes a
+    second slot beside it. --check resolves the same path so its verdict
+    matches the write that follows it.
+    """
+    path = PATH + ".bak-pre-overflowrouter" + (".reverse" if args.reverse else "")
+    if marker_count and not args.reverse:
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return path
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        return path + ".upgrade"
+    return path
+
+
 if block_count:
     counts = (block_count, hook_new_count, marker_count, anchor_count)
     if counts != (1, 1, 1, 1):
@@ -525,6 +566,14 @@ if args.check:
         parses(out)
     except (SyntaxError, ValueError) as error:
         print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
+    # The recovery copy is the one precondition an apply can reach after this
+    # point, so a verdict that ignored it would approve a write that aborts.
+    try:
+        conflict = recovery_copy_conflict(recovery_path(), src.encode("utf-8"))
+    except OSError as error:
+        print("ABORT: the recovery copy blocks this write; target unchanged:\n", error); sys.exit(3)
+    if conflict:
+        print("ABORT: the recovery copy blocks this write; target unchanged:\n", conflict); sys.exit(3)
     print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None
@@ -543,18 +592,8 @@ try:
     bytecode = candidate + ".pyc"
     py_compile.compile(candidate, cfile=bytecode, doraise=True)
     guard_target()
-    backup_path = PATH + ".bak-pre-overflowrouter" + (".reverse" if args.reverse else "")
-    if marker_count and not args.reverse:
-        try:
-            backup_stat = os.lstat(backup_path)
-        except FileNotFoundError:
-            pass
-        else:
-            if not stat.S_ISREG(backup_stat.st_mode):
-                raise OSError("existing recovery backup is not a regular file")
-            backup_path += ".upgrade"
     write_backup_exclusive(
-        backup_path,
+        recovery_path(),
         src.encode("utf-8"),
         st.st_mode,
     )
