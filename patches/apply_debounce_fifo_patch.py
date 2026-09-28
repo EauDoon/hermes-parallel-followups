@@ -413,9 +413,13 @@ MEDIA_FIXED_NEW = '''        state = store.pop(session_key, None)
 def flush_site(source):
     """Span of the first ``_flush_text_debounce_now`` body, or None.
 
-    The OLD block is ten plain lines with no signature of their own, so a
-    count of one is not proof that it is still the flush site. Bound it to
-    the method it was cut from.
+    The OLD block is plain lines with no signature of their own, so a count
+    of one is not proof that it is still the flush site. The body ends at the
+    next line that is not blank, not a comment, and not indented strictly
+    deeper than the def. A following class, the next method, or a
+    module-level function all close it. Stopping only at the next ``def`` of
+    the same indent left a nested class, and anything after the last method,
+    inside the span, so a copy of the anchor there was rewritten.
     """
     site = re.search(
         r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+_flush_text_debounce_now[ \t]*\(",
@@ -423,11 +427,26 @@ def flush_site(source):
     )
     if site is None:
         return None
-    sibling = re.search(
-        r"(?m)^%s(?:async[ \t]+)?def[ \t]+" % re.escape(site.group(1)),
-        source[site.end():],
-    )
-    return site.end(), site.end() + sibling.start() if sibling else len(source)
+    indent = site.group(1)
+    line_start = source.find("\n", site.end())
+    if line_start < 0:
+        return site.end(), len(source)
+    end = len(source)
+    i = line_start + 1
+    while i < len(source):
+        nxt = source.find("\n", i)
+        if nxt < 0:
+            nxt = len(source)
+        line = source[i:nxt]
+        if line.strip() and not line.lstrip().startswith("#"):
+            deeper = line.startswith(indent + " ") or line.startswith(indent + "\t")
+            if not deeper:
+                end = i
+                break
+        if nxt == len(source):
+            break
+        i = nxt + 1
+    return site.end(), end
 
 
 try:
