@@ -207,6 +207,72 @@ class PatchInstallerTests(unittest.TestCase):
             self.assertNotIn(previous_constants["BLOCK"], upgraded)
             assert_crlf_only(self, target.read_bytes())
 
+    def test_repeated_router_upgrades_each_keep_the_source_they_replaced(self):
+        # Regression: every upgrade wrote the same .upgrade name, so the first
+        # upgrade filled the only slot and every later one aborted. An operator
+        # who had upgraded once could never take a later block again, and stayed
+        # on a stale router with only a message about a "recovery backup" that
+        # named no file. The earlier generations are synthetic, built the same
+        # way the upgrade test above builds one.
+        script = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
+        current_source = script.read_text(encoding="utf-8")
+        clauses = (
+            '            r"|\\\\balso\\\\b"\n',
+            '            r"|#\\\\d"\n',
+        )
+        for clause in clauses:
+            self.assertEqual(current_source.count(clause), 1, "upgrade fixture no longer matches the block")
+        generations = [current_source.replace(clause, "", 1) for clause in clauses] + [current_source]
+
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td)
+            installers = []
+            for index, body in enumerate(generations):
+                installer = directory / f"generation_{index}.py"
+                installer.write_text(body, encoding="utf-8")
+                installers.append(installer)
+            current_constants = string_constants(script)
+            target = directory / "target.py"
+            target.write_text(
+                unpatched_source(
+                    current_constants, "HOOK_OLD", "_maybe_route_overflow_to_background",
+                ),
+                encoding="utf-8",
+            )
+            backup = Path(str(target) + ".bak-pre-overflowrouter")
+            original = target.read_bytes()
+
+            # The first generation is a plain install, so it takes the base
+            # copy. Every later one must install too, and must preserve the
+            # source it replaced in a slot of its own.
+            replaced = original
+            for index, installer in enumerate(installers):
+                with self.subTest(generation=index):
+                    result = self.run_installer(installer, target, directory)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.strip(), "PATCHED_OK")
+                    slot = backup if index == 0 else Path(
+                        str(backup) + (".upgrade" if index == 1 else ".upgrade.%d" % index)
+                    )
+                    self.assertEqual(slot.read_bytes(), replaced)
+                    replaced = target.read_bytes()
+                    self.assertEqual(backup.read_bytes(), original)
+                    # The block of the generation just installed is the one in
+                    # the file, and no earlier generation's block survives.
+                    installed = target.read_text(encoding="utf-8")
+                    self.assertIn(string_constants(installer)["BLOCK"], installed)
+                    for older in installers[:index]:
+                        self.assertNotIn(string_constants(older)["BLOCK"], installed)
+                    # The current installer sees a pending upgrade for every
+                    # earlier generation, and nothing once the last one lands.
+                    check = self.run_installer(script, target, directory, "--check")
+                    self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+                    self.assertEqual(
+                        check.stdout.strip(),
+                        "ALREADY_PATCHED" if index == len(installers) - 1 else "UPGRADE_APPLICABLE",
+                    )
+                    assert_no_staging_residue(self, directory, target)
+
     def test_unrelated_marker_mention_does_not_skip_patch(self):
         for script_name, old_name, old_marker, backup_suffix in INSTALLERS:
             with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
