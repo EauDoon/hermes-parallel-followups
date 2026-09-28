@@ -503,9 +503,9 @@ anchor_count = src.count(anchor)
 def recovery_path():
     """Backup path the write uses, chosen by exactly the rule it writes under.
 
-    An upgrade has to keep the copy taken by the first install, so it takes a
-    second slot beside it. --check resolves the same path so its verdict
-    matches the write that follows it.
+    An upgrade has to keep the copy taken by the first install, so it writes
+    beside it. --check resolves the same path so its verdict matches the write
+    that follows it.
     """
     path = PATH + ".bak-pre-overflowrouter" + (".reverse" if args.reverse else "")
     if marker_count and not args.reverse:
@@ -515,7 +515,19 @@ def recovery_path():
             return path
         if not stat.S_ISREG(info.st_mode):
             raise OSError("existing recovery backup is not a regular file")
-        return path + ".upgrade"
+        # Every upgrade keeps the source it replaced, so those copies need one
+        # slot each: .upgrade, then .upgrade.2, .upgrade.3. A single .upgrade
+        # name made the FIRST upgrade fill the only slot and every later one
+        # abort, which left the router on a stale block with no way forward
+        # short of deleting a recovery copy by hand.
+        for ordinal in range(1, 9):
+            slot = path + ".upgrade" if ordinal == 1 else "%s.upgrade.%d" % (path, ordinal)
+            if not os.path.lexists(slot):
+                return slot
+        raise OSError(
+            "no free upgrade recovery slot beside %s; preserve or relocate "
+            "them before retrying" % path
+        )
     return path
 
 

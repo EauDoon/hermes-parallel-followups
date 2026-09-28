@@ -64,7 +64,7 @@ python3 patches/apply_debounce_fifo_patch.py /path/to/hermes/gateway/platforms/b
 python3 patches/apply_busy_overflow_router_patch.py /path/to/hermes/gateway/run.py --reverse
 ```
 
-Backups are adjacent to the originals as `*.bak-pre-debouncefifo` and `*.bak-pre-overflowrouter`. Existing backups are never overwritten. An exact recovery copy may be reused after a reverse and reapply; a different existing copy aborts the write. Router upgrades preserve the prior installed source in `.upgrade` and reversal preserves the patched source in `.reverse`. Reversal changes only the exact current patch, so unrelated source edits remain; an edited or older router block aborts. Restart the gateway after reversal. See the [case study](docs/CASE_STUDY.md) for the fallback and cancellation tradeoffs.
+Backups are adjacent to the originals as `*.bak-pre-debouncefifo` and `*.bak-pre-overflowrouter`. Existing backups are never overwritten. An exact recovery copy may be reused after a reverse and reapply; a different existing copy aborts the write. Router upgrades preserve the prior installed source in `.upgrade`, and later upgrades in `.upgrade.2`, `.upgrade.3`, and so on, so each generation stays recoverable and no upgrade is locked out by an earlier one. Reversal preserves the patched source in `.reverse`. Reversal changes only the exact current patch, so unrelated source edits remain; an edited or older router block aborts. Restart the gateway after reversal. See the [case study](docs/CASE_STUDY.md) for the fallback and cancellation tradeoffs.
 
 ## Compatibility and evidence
 
