@@ -71,6 +71,9 @@ MUST_BG = [
     # routable.
     "what is the trade deficit of the US compared with Japan",
     "tell me about the population of Reykjavik",
+    # A newline is ordinary text. Backspace and DEL are not, and are covered
+    # with the queued cases below.
+    "what is the population of Ulaanbaatar today\nand why does the census matter for planning",
 ]
 
 MUST_Q = [
@@ -103,6 +106,10 @@ MUST_Q = [
     "Can you summarize the report for me?",
     "Why is it’s formatting inconsistent across the examples?",
     "Why is th\u200bis configuration failing during startup?",
+    # Backspace and DEL are not format characters, but they hide the same
+    # tokens. "the former" and "also" must still force the queue.
+    "how does the for\x08mer compare with geothermal power",
+    "what is the population of Oslo and al\x08so Bergen today",
     "What are the implications of the conclusion?\n> earlier response",
     "[project2026] What are the most effective migration methods?",
     # "the former"/"the latter" resolve only against the turn in flight. A

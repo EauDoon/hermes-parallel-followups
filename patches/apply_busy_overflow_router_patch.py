@@ -278,7 +278,11 @@ BLOCK = '''    # ---------------------------------------------------------------
             return False
         # Invisible format characters can hide a contextual token. Queue
         # ambiguous input instead of stripping away evidence of dependency.
+        # Backspace, DEL, and the other controls do the same and are not Cf.
+        # Newline, carriage return, and tab are ordinary text.
         if any(unicodedata.category(char) == "Cf" for char in text):
+            return False
+        if any(unicodedata.category(char) == "Cc" and char not in "\\n\\r\\t" for char in text):
             return False
         t = unicodedata.normalize("NFKC", text).replace("\\u2019", "'").replace("\\u2018", "'").strip()
         if re.search(r"(?m)^\\s*>", t):
