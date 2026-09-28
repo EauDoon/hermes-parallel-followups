@@ -493,9 +493,18 @@ BLOCK = '''    # ---------------------------------------------------------------
         except BaseException:
             coroutine.close()
             raise
-        self._background_tasks.add(task)
-        active[task] = session_key
-        task.add_done_callback(self._overflow_router_done)
+        # create_task has already scheduled the follow-up. If recording it
+        # raises, the caller queues the same event. Cancel the orphan first
+        # so it cannot also generate.
+        try:
+            self._background_tasks.add(task)
+            active[task] = session_key
+            task.add_done_callback(self._overflow_router_done)
+        except BaseException:
+            active.pop(task, None)
+            self._background_tasks.discard(task)
+            task.cancel()
+            raise
         return True
 
 '''
