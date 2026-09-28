@@ -940,6 +940,71 @@ class PatchInstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PATCHED_OK", result.stdout)
 
+    def test_router_symbol_check_requires_a_real_module_binding(self):
+        # A docstring line, a comment, and an alias satisfied the substring
+        # and regex checks. A combined import and a parenthesized import,
+        # which do bind the names, were refused.
+        script = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
+        constants = string_constants(script)
+        source = unpatched_source(constants, "HOOK_OLD", "_maybe_route_overflow_to_background")
+        refuses = {
+            "import-in-docstring": source.replace(
+                "\nimport re\n",
+                "\n'''\nimport re\n'''\n",
+                1,
+            ),
+            "cfg-get-aliased": source.replace(
+                "from hermes_cli.config import _load_gateway_runtime_config, cfg_get\n",
+                "from hermes_cli.config import _load_gateway_runtime_config, cfg_get as get_cfg\n",
+                1,
+            ),
+            "cfg-get-in-comment": source.replace(
+                "from hermes_cli.config import _load_gateway_runtime_config, cfg_get\n",
+                "from hermes_cli.config import _load_gateway_runtime_config  # cfg_get was removed\n",
+                1,
+            ),
+        }
+        accepts = {
+            "combined-import": source.replace(
+                "import re\nimport os\nimport time\nimport asyncio\n",
+                "import re, os, time, asyncio\n",
+                1,
+            ),
+            "parenthesized-import": source.replace(
+                "from hermes_cli.config import _load_gateway_runtime_config, cfg_get\n",
+                "from hermes_cli.config import (\n    _load_gateway_runtime_config,\n    cfg_get,\n)\n",
+                1,
+            ),
+        }
+
+        for name, incomplete in refuses.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                target = directory / "target.py"
+                target.write_text(incomplete, encoding="utf-8")
+                original = target.read_bytes()
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False, capture_output=True, text=True,
+                    env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("ABORT", result.stdout)
+                self.assertEqual(target.read_bytes(), original)
+
+        for name, complete in accepts.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                target = directory / "target.py"
+                target.write_text(complete, encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, str(script), str(target)],
+                    check=False, capture_output=True, text=True,
+                    env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("PATCHED_OK", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
