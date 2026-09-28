@@ -73,6 +73,7 @@ MUST_BG = [
     "tell me about the population of Reykjavik",
     "what is the best option a family has for heating a home in winter",
     "what is the first city to exceed ten million people",
+    "what is the population of Sa\u0303o Paulo and why does the census matter",
     # "did you recommend" is a back-reference. A request to recommend
     # something new is self-contained and must stay routable.
     "can you recommend a city with reliable winter transit",
@@ -120,6 +121,10 @@ MUST_Q = [
     # Backspace and DEL are not format characters, but they hide the same
     # tokens. "the former" and "also" must still force the queue.
     "how does the for\x08mer compare with geothermal power",
+    # A combining grapheme joiner is not a format character or a control,
+    # but it still splits "former" so the phrase match never sees it.
+    # NFD "São" recomposes under NFKC and stays in the background cases.
+    "how does the for\u034fmer compare with geothermal power today",
     "what is the population of Oslo and al\x08so Bergen today",
     "What are the implications of the conclusion?\n> earlier response",
     "[project2026] What are the most effective migration methods?",
