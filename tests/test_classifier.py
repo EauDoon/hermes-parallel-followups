@@ -119,6 +119,12 @@ MUST_Q = [
     "what did we decide about the budget allocation",
     "how does our current exposure compare to the index",
     "why do you think we should wait for the print",
+    # The wh-word is not always the token before the auxiliary, and the
+    # auxiliary is often contracted. The inverted form is the same question.
+    "which model did we pick for the summary task",
+    "why don't we set the timeout to thirty seconds",
+    "should we wait for the quarterly print",
+    "are we still using the old rate limit",
 ]
 
 fails = []
