@@ -89,6 +89,11 @@ def assert_no_staging_residue(testcase, directory, target):
     testcase.assertFalse(list(directory.glob(f".{target.name}.*.tmp*")))
 
 
+def entries(directory):
+    """Directory listing without the bytecode prefix the fixtures redirect to."""
+    return sorted(path.name for path in directory.iterdir() if path.name != "pycache")
+
+
 class PatchInstallerTests(unittest.TestCase):
     def test_current_router_install_rejects_malformed_structure(self):
         script = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
@@ -517,6 +522,81 @@ class PatchInstallerTests(unittest.TestCase):
                 self.assertIn("target unchanged", result.stdout)
                 self.assertEqual(target.read_text(encoding="utf-8"), source)
                 self.assertEqual(backup.read_bytes(), previous_backup)
+                assert_no_staging_residue(self, directory, target)
+
+    def run_installer(self, script, target, directory, *options):
+        return subprocess.run(
+            [sys.executable, str(script), str(target), *options],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
+        )
+
+    def test_check_agrees_with_the_write_about_a_conflicting_recovery_copy(self):
+        # The README promises a --check verdict always matches the install
+        # that follows it. The recovery copy is written after the verdict, so
+        # a check that ignored it approved a write that then aborted on exit 3.
+        # The verdict must be the same for the real write and for --check.
+        for script_name, old_name, old_marker, backup_suffix in INSTALLERS:
+            for direction, write_options, extra_suffix in (
+                ("apply", (), ""), ("reverse", ("--reverse",), ".reverse"),
+            ):
+                with self.subTest(script=script_name, direction=direction), \
+                        tempfile.TemporaryDirectory() as td:
+                    directory = Path(td)
+                    script = ROOT / "patches" / script_name
+                    target = directory / "target.py"
+                    target.write_text(
+                        unpatched_source(string_constants(script), old_name, old_marker),
+                        encoding="utf-8",
+                    )
+                    if write_options:
+                        applied = self.run_installer(script, target, directory)
+                        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+                    conflicting = Path(str(target) + backup_suffix + extra_suffix)
+                    conflicting.write_bytes(b"operator-owned recovery copy\n")
+                    installed = target.read_bytes()
+
+                    for extra in (write_options, (*write_options, "--check")):
+                        with self.subTest(options=extra):
+                            before = entries(directory)
+                            result = self.run_installer(script, target, directory, *extra)
+
+                            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                            self.assertIn(
+                                "existing recovery backup differs", result.stdout,
+                            )
+                            self.assertEqual(target.read_bytes(), installed)
+                            self.assertEqual(
+                                conflicting.read_bytes(), b"operator-owned recovery copy\n",
+                            )
+                            self.assertEqual(entries(directory), before)
+                            assert_no_staging_residue(self, directory, target)
+
+    def test_check_still_approves_a_recovery_copy_the_write_may_reuse(self):
+        # The other side of the same contract: after a reverse and a reapply
+        # the copy on disk is byte-identical, the write reuses it, and --check
+        # must keep saying the install is safe to run.
+        for script_name, old_name, old_marker, backup_suffix in INSTALLERS:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as td:
+                directory = Path(td)
+                script = ROOT / "patches" / script_name
+                target = directory / "target.py"
+                target.write_text(
+                    unpatched_source(string_constants(script), old_name, old_marker),
+                    encoding="utf-8",
+                )
+                original = target.read_bytes()
+                reusable = Path(str(target) + backup_suffix)
+                reusable.write_bytes(original)
+
+                result = self.run_installer(script, target, directory, "--check")
+
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.strip(), "APPLICABLE")
+                self.assertEqual(target.read_bytes(), original)
+                self.assertEqual(reusable.read_bytes(), original)
                 assert_no_staging_residue(self, directory, target)
 
     def test_existing_backup_symlink_is_never_followed(self):

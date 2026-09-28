@@ -69,6 +69,26 @@ def parses(text):
     return compile(text.encode("utf-8"), PATH, "exec")
 
 
+def recovery_copy_conflict(path, contents):
+    """Why the recovery copy at ``path`` makes the write abort, or None.
+
+    Mirrors the O_EXCL branch of write_backup_exclusive so --check predicts
+    the apply instead of approving a write that then fails, and names the same
+    reason. Deliberately not shared with that branch: a path that disappears
+    between the O_EXCL failure and the lstat there is a hard write abort, while
+    here it simply means the copy does not exist yet and the write will make it.
+    """
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return "existing recovery backup is not a regular file"
+    if checked_read(path) != contents:
+        return "existing recovery backup differs; preserve or relocate it before retrying"
+    return None
+
+
 def write_backup_exclusive(path, contents, mode):
     """Create a recovery copy without following or replacing an existing path."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -280,6 +300,17 @@ if args.check:
         parses(out)
     except (SyntaxError, ValueError) as error:
         print("ABORT: candidate syntax is invalid:\n", error); sys.exit(3)
+    # The recovery copy is the one precondition an apply can reach after this
+    # point, so a verdict that ignored it would approve a write that aborts.
+    try:
+        conflict = recovery_copy_conflict(
+            PATH + ".bak-pre-debouncefifo" + (".reverse" if args.reverse else ""),
+            src.encode("utf-8"),
+        )
+    except OSError as error:
+        print("ABORT: the recovery copy blocks this write; target unchanged:\n", error); sys.exit(3)
+    if conflict:
+        print("ABORT: the recovery copy blocks this write; target unchanged:\n", conflict); sys.exit(3)
     print("REVERSIBLE" if args.reverse else "APPLICABLE"); sys.exit(0)
 
 candidate = bytecode = None
