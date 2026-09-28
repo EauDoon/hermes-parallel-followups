@@ -2,6 +2,7 @@
 from pathlib import Path
 import contextlib
 import io
+import os
 import py_compile
 import runpy
 import subprocess
@@ -108,6 +109,41 @@ class PatchWorkflowTests(unittest.TestCase):
                 self.assertEqual(target.read_text(), changed)
                 self.assertFalse(Path(str(target) + suffix).exists())
                 self.assertFalse(list(Path(td).glob(".target.py.*.tmp*")))
+
+    def test_rejected_replace_does_not_leave_a_backup_that_blocks_retry(self):
+        # The recovery copy is written before the last guard. If that guard
+        # then sees a concurrent edit, the copy used to stay on disk. The
+        # target was never replaced, but the next install aborted because the
+        # copy no longer matched it.
+        real_fsync = os.fsync
+        for name, old, marker, suffix in INSTALLERS:
+            with self.subTest(installer=name), tempfile.TemporaryDirectory() as td:
+                script = ROOT / "patches" / name
+                target = Path(td) / "target.py"
+                original = unpatched_source(string_constants(script), old, marker)
+                target.write_text(original)
+                changed = original + "\n# concurrently edited\n"
+                calls = {"n": 0}
+
+                def fsync(fd):
+                    calls["n"] += 1
+                    real_fsync(fd)
+                    if calls["n"] == 2:
+                        target.write_text(changed)
+
+                output = io.StringIO()
+                with patch.object(sys, "argv", [str(script), str(target)]), \
+                        patch("os.fsync", side_effect=fsync), \
+                        contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                    runpy.run_path(str(script), run_name="__main__")
+                self.assertEqual(raised.exception.code, 3, output.getvalue())
+                self.assertIn("target changed", output.getvalue())
+                self.assertEqual(target.read_text(), changed)
+                self.assertFalse(Path(str(target) + suffix).exists())
+                self.assertFalse(list(Path(td).glob(target.name + ".bak-pre-*")))
+                retry = invoke(script, target, "--check")
+                self.assertEqual(retry.returncode, 0, retry.stdout + retry.stderr)
+                self.assertEqual(retry.stdout.strip(), "APPLICABLE")
 
 
 if __name__ == "__main__":
