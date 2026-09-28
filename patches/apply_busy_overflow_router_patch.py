@@ -297,6 +297,12 @@ BLOCK = '''    # ---------------------------------------------------------------
         if any(unicodedata.category(char) == "Cc" and char not in "\\n\\r\\t" for char in text):
             return False
         t = unicodedata.normalize("NFKC", text).replace("\\u2019", "'").replace("\\u2018", "'").strip()
+        # A combining mark that NFKC does not fold into a letter can sit
+        # inside "former" or "also". Format characters and controls are
+        # already queued above. A mark that recomposes, as in NFD "São",
+        # is ordinary text and is not queued for being a mark.
+        if any(unicodedata.category(char) in ("Mn", "Me") for char in t):
+            return False
         if re.search(r"(?m)^\\s*>", t):
             return False
         # Quote-replies and back-references are contextual by definition.
