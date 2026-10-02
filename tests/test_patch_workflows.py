@@ -50,6 +50,48 @@ class PatchWorkflowTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(list(Path(td).iterdir()), [target])
 
+    def test_current_debounce_block_outside_flush_is_not_installed_or_reversed(self):
+        script = ROOT / "patches" / "apply_debounce_fifo_patch.py"
+        constants = string_constants(script)
+        original = unpatched_source(constants, "OLD", "_queue_or_replace_pending_event")
+        installed = original.replace(constants["OLD"], constants["NEW"], 1)
+        for replacement in (
+            "_unrelated_method",
+            "_flush_text_debounce_now(self, session_key):\n        return False\n\n    async def _unrelated_method",
+        ):
+            source = installed.replace("_flush_text_debounce_now", replacement, 1).encode()
+            for options in ((), ("--check",), ("--reverse",), ("--reverse", "--check")):
+                with self.subTest(replacement=replacement, options=options), tempfile.TemporaryDirectory() as td:
+                    target = Path(td) / "target.py"
+                    target.write_bytes(source)
+                    result = invoke(script, target, *options)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn("not inside _flush_text_debounce_now", result.stdout)
+                    self.assertEqual(target.read_bytes(), source)
+                    self.assertEqual(list(Path(td).iterdir()), [target])
+
+    def test_debounce_blocks_in_strings_are_not_flush_statements(self):
+        script = ROOT / "patches" / "apply_debounce_fifo_patch.py"
+        constants = string_constants(script)
+        original = unpatched_source(constants, "OLD", "_queue_or_replace_pending_event")
+        prefix = original[:original.index(constants["OLD"])]
+        guard = constants["OLD"].split("        state = store.pop(session_key, None)", 1)[0]
+        for block in (constants["OLD"], constants["NEW"], guard + constants["PREVIOUS_NEW"],
+                      guard + constants["MEDIA_FIXED_NEW"]):
+            # Real method, inert patch text; non-ASCII prefix protects the
+            # location check from confusing AST byte columns with characters.
+            source = ("# Unicode: \u03bb\n" + prefix + "        note = '''\n" + block
+                      + "        '''\n        return False\n").encode("utf-8")
+            for options in ((), ("--check",), ("--reverse",), ("--reverse", "--check")):
+                with self.subTest(block=block[:60], options=options), tempfile.TemporaryDirectory() as td:
+                    target = Path(td) / "target.py"
+                    target.write_bytes(source)
+                    result = invoke(script, target, *options)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn("not inside _flush_text_debounce_now", result.stdout)
+                    self.assertEqual(target.read_bytes(), source)
+                    self.assertEqual(list(Path(td).iterdir()), [target])
+
     def test_apply_reverse_reapply_preserves_bytes_and_backups(self):
         for name, old, marker, suffix in INSTALLERS:
             for ending in ("\n", "\r\n"):
