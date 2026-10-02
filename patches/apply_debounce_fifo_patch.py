@@ -24,7 +24,7 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import ast, sys, py_compile, os, stat, tempfile, argparse, re
+import ast, sys, py_compile, os, stat, tempfile, argparse
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py")
@@ -437,43 +437,27 @@ MEDIA_FIXED_NEW = '''        state = store.pop(session_key, None)
         return True
 '''
 
-def flush_site(source):
-    """Span of the first ``_flush_text_debounce_now`` body, or None.
+def flush_site(source, block):
+    """Require the anchor to start a direct statement in the real flush body.
 
-    The OLD block is plain lines with no signature of their own, so a count
-    of one is not proof that it is still the flush site. The body ends at the
-    next line that is not blank, not a comment, and not indented strictly
-    deeper than the def. A following class, the next method, or a
-    module-level function all close it. Stopping only at the next ``def`` of
-    the same indent left a nested class, and anything after the last method,
-    inside the span, so a copy of the anchor there was rewritten.
+    Textual indentation also admits inert string contents and nested helpers.
+    Compare line numbers, not AST byte columns, so Unicode and CRLF are safe.
     """
-    site = re.search(
-        r"(?m)^([ \t]*)(?:async[ \t]+)?def[ \t]+_flush_text_debounce_now[ \t]*\(",
-        source,
-    )
-    if site is None:
-        return None
-    indent = site.group(1)
-    line_start = source.find("\n", site.end())
-    if line_start < 0:
-        return site.end(), len(source)
-    end = len(source)
-    i = line_start + 1
-    while i < len(source):
-        nxt = source.find("\n", i)
-        if nxt < 0:
-            nxt = len(source)
-        line = source[i:nxt]
-        if line.strip() and not line.lstrip().startswith("#"):
-            deeper = line.startswith(indent + " ") or line.startswith(indent + "\t")
-            if not deeper:
-                end = i
-                break
-        if nxt == len(source):
-            break
-        i = nxt + 1
-    return site.end(), end
+    try:
+        tree = ast.parse(source.lstrip("\ufeff"))
+    except (SyntaxError, ValueError) as error:
+        print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
+    methods = [node for node in ast.walk(tree)
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and node.name == "_flush_text_debounce_now"]
+    if not methods:
+        return False
+    method = min(methods, key=lambda node: node.lineno)
+    start = source.index(block)
+    if start and source[start - 1] != "\n":
+        return False
+    line = source.count("\n", 0, start) + 1
+    return any(statement.lineno == line for statement in method.body)
 
 
 try:
@@ -606,6 +590,8 @@ if new_count:
             "ABORT: malformed current install (patched=%d, unpatched=%d, legacy=%d, media=%d)"
             % (new_count, old_count, legacy_count, media_count)
         ); sys.exit(2)
+    if not flush_site(src, new):
+        print("ABORT: the flush site is not inside _flush_text_debounce_now"); sys.exit(2)
     try:
         parses(src)
     except (SyntaxError, ValueError) as error:
@@ -624,8 +610,7 @@ elif legacy_count or media_count:
     # A fresh install already requires the anchor to sit inside the flush
     # method. An upgrade only counted the older body, so a copy in another
     # method was rewritten and the real flush was left alone.
-    site = flush_site(src)
-    if site is None or not site[0] <= src.index(region) < site[1]:
+    if not flush_site(src, region):
         print("ABORT: the flush site is not inside _flush_text_debounce_now"); sys.exit(2)
     try:
         parses(src)
@@ -640,8 +625,7 @@ elif legacy_count or media_count:
 else:
     if old_count != 1:
         print("ABORT: expected exactly 1 flush site, found %d" % old_count); sys.exit(2)
-    site = flush_site(src)
-    if site is None or not site[0] <= src.index(old) < site[1]:
+    if not flush_site(src, old):
         print("ABORT: the flush site is not inside _flush_text_debounce_now"); sys.exit(2)
     if args.reverse:
         print("ALREADY_UNPATCHED"); sys.exit(0)

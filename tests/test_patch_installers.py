@@ -752,6 +752,13 @@ class PatchInstallerTests(unittest.TestCase):
         }
 
         for name, source in cases.items():
+            invalid_syntax = name == "nested-class-after-flush"
+            if invalid_syntax:
+                # The old fixture has the method and its body at one indent.
+                with self.assertRaises(SyntaxError):
+                    ast.parse(source)
+            else:
+                ast.parse(source)
             with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
                 directory = Path(td)
                 target = directory / "target.py"
@@ -767,7 +774,9 @@ class PatchInstallerTests(unittest.TestCase):
                             text=True,
                             env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
                         )
-                        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                        self.assertEqual(result.returncode, 3 if invalid_syntax else 2, result.stdout + result.stderr)
+                        if invalid_syntax:
+                            self.assertIn("target syntax is invalid", result.stdout)
                         self.assertIn("ABORT", result.stdout)
                         self.assertEqual(target.read_bytes(), original)
                         self.assertFalse(Path(str(target) + ".bak-pre-debouncefifo").exists())
