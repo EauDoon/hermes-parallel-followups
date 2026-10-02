@@ -2,7 +2,7 @@
 
 This case study explains one narrow debugging result: a busy Hermes session can turn several separate follow-ups into one unlabeled turn. It records the smallest effective fix, the safety fallbacks around it, and the local evidence that can be reproduced without an installed Hermes gateway.
 
-**Evidence status:** offline checks passed on 28-09-2026 with Python 3.12.10 on Windows. The pinned Hermes source fixture and live gateway checks were not run in that check.
+**Evidence status:** offline checks and the pinned-source lifecycle/FIFO validator passed on 02-10-2026 with Python 3.12.14 on Windows. The public fixture hashes matched before execution; live gateway checks were not run. The offline suite skipped five host-dependent installer cases. Earlier results below retain their original dates and scope.
 
 ## 1. The symptom
 
@@ -59,7 +59,7 @@ The router has its own conservative limits:
 - `independent` routes only text that looks self-contained. `all` can route contextual text and therefore has a higher cold-context risk.
 - A background agent starts without conversation history, and its answer is not written into the main transcript. In `independent` mode, ambiguous, corrective, artifact-mutating, quoted, media, command, internal, empty, and short messages stay queued. `all` relaxes the classifier for contextual text.
 - The default cap is two overflow tasks per session and eight across the runner. Zero disables dispatch. Invalid values fail closed to queueing.
-- The acknowledgment and generation share one owned task. The acknowledgment has a five-second timeout. A send failure still permits generation, while owner cancellation cancels the acknowledgment and generation together. Completed, failed, and canceled tasks release capacity. Failed generation is observed and is not retried.
+- The acknowledgment and generation share one owned task. After five seconds the owner requests acknowledgment cancellation and awaits cleanup. Supported adapters must honor cancellation. A cancellation-resistant adapter retains its owned task and capacity slot until cleanup finishes; the deadline is not a hard elapsed-time bound. A send failure still permits generation, while owner cancellation prevents generation after acknowledgment cleanup. Completed, failed, and canceled tasks release capacity. Failed generation is observed and is not retried.
 - Background work uses the main model, so enabling it can add concurrent provider calls and rate-limit pressure.
 
 These choices make a false queue classification slower, while a false background classification can answer a context-dependent question without the conversation that explains it.
@@ -106,7 +106,7 @@ gateway/platforms/base.py  6bfdf20de31ae01fbd088457b91252d2430f9bc45d0a84ba13259
 gateway/run.py             36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3767dddbda89
 ```
 
-That fixture gate was not run in the local check above because no matching public source fixture was supplied. Its refusal paths, which need no upstream source, run in the offline suite as `test_validate_upstream.py`. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks require an installed Hermes at `/opt/hermes` and were not run.
+That fixture gate was not run in the local check above because no matching public source fixture was supplied. Its refusal paths, which need no upstream source, run in the offline suite as `test_validate_upstream.py`. The separate pinned-source CI job now downloads the two exact public files, checks the recorded hashes, and exercises the happy path in disposable copies; a particular run must succeed before it counts as evidence. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks require an installed Hermes at `/opt/hermes` and were not run.
 
 Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResearch/hermes-agent/commit/ed2d821021e073425994544dca292d36a12cf4a3), checked on 09-09-2026, has a different runner structure. The router installer refuses it because its required hook is absent. Compatibility with that revision and newer releases is unsupported. An anchor failure must not be bypassed.
 
@@ -123,3 +123,8 @@ The full commands and exit-code meanings are in the [README](../README.md). The 
 MIT. See [LICENSE](../LICENSE).
 
 Hermes Agent is MIT licensed, Copyright (c) 2025 Nous Research. This repository is a derivative work that quotes small portions of Hermes source for context. It is an independent contribution and is not affiliated with or endorsed by Nous Research.
+
+The cancellation-resistance regression uses an explicitly releasable synthetic
+child and bounded test cleanup. It verifies retained ownership, no generation
+before cleanup, no capacity reuse while the child remains active, and exactly
+one generation afterward. It does not certify a live adapter implementation.
