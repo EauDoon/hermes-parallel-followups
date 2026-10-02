@@ -30,9 +30,21 @@ display:
   busy_overflow_max_total: 8
 ```
 
-`independent` routes only self-contained questions. `all` also routes contextual text and carries more correctness risk because a background agent starts without conversation history. Commands, media, internal events, empty text, and explicit reply events remain queued. Invalid limits fail closed, zero disables dispatch, and completed, failed, or canceled tasks release capacity. Acknowledgments time out after five seconds, and cancellation cannot send the same event through both lanes.
+`independent` routes only self-contained questions. `all` also routes contextual text and carries more correctness risk because a background agent starts without conversation history. Commands, media, internal events, empty text, and explicit reply events remain queued. Invalid limits fail closed, zero disables dispatch, and completed, failed, or canceled tasks release capacity. Acknowledgment cancellation is requested after five seconds. Supported adapters must cooperate with cancellation; the router awaits their cleanup while retaining the task and its capacity slot. An adapter that suppresses cancellation can exceed that deadline, so this is not a hard end-to-end timeout. Cancellation does not send the same event through both lanes.
 
 The router key is custom. `hermes config set` may warn that it is not recognized; the patch reads it directly.
+
+## Compatibility before installation
+
+| Source revision | Status |
+| --- | --- |
+| `d7b36070ef807841699ad32c5b6af547fee3ff64` | Supported pinned source fixture; CI checks its exact hashes and the patch lifecycle. |
+| `ed2d821021e073425994544dca292d36a12cf4a3` | Known incompatible router structure; its hook is absent. |
+| Any other revision | Unverified. An `APPLICABLE` result checks source anchors and preconditions, not runtime compatibility. |
+
+Do not bypass an anchor failure or assume a newer Hermes release is supported.
+The fixture gate runs selected methods with synthetic events, not a complete
+Hermes gateway or a live model. The exact hashes and local command are below.
 
 ## Quick start
 
@@ -52,7 +64,7 @@ python3 patches/apply_busy_overflow_router_patch.py /path/to/hermes/gateway/run.
 
 Restart the gateway after applying. With no path, both scripts use the standard `/opt/hermes` targets. If the deployment recreates its container, reapply the patches from the image-update hook.
 
-The installers refuse symlinks and non-regular files, require exact anchors, stage and compile the replacement before touching the target, detect target drift, and atomically replace the file. A staging or compile failure leaves the target unchanged. The debounce installer also requires the replaced block to sit inside `_flush_text_debounce_now`, so a file that merely contains the same ten lines in some other method is refused rather than rewritten. An upgrade of an older flush body uses that same rule. Each installer also refuses a target that does not bind the names its injected code calls at runtime (`logger` and `MessageType` in `base.py`; `logger`, the module imports, `_load_gateway_runtime_config`, and `cfg_get` in `run.py`), because a missing name would raise at the first busy follow-up instead of at install time. Reverse does not apply that check: it removes those calls, so an already installed patch can still be uninstalled when the names are missing. `--check` creates no backup, bytecode, or temporary file, and it evaluates the same preconditions the install does: it syntax-checks the exact bytes an apply would write, it resolves the recovery copy that write would need, refusing with exit code 3 and the same reason when a copy already on disk is not one the write may reuse, and it refuses when the target directory cannot hold the temporary file that write creates. Its verdict therefore always matches the install that follows it. Successful checks print `APPLICABLE`, `UPGRADE_APPLICABLE` for a router or debounce flush-body upgrade, or `ALREADY_PATCHED`; reverse checks print `REVERSIBLE`, or `ALREADY_UNPATCHED` when no patch remains. Exit code 2 means an incompatible target or argument. Exit code 3 means a staging, compile, recovery, or target-change failure. Replacement is not a transaction with an unrelated concurrent writer, so stop other writers first.
+The installers refuse symlinks and non-regular files, require exact anchors, stage and compile the replacement before touching the target, detect target drift, and atomically replace the file. A staging or compile failure leaves the target unchanged. The debounce installer also requires the replaced block to sit inside `_flush_text_debounce_now`, so a file that merely contains the same ten lines in some other method is refused rather than rewritten. An upgrade of an older flush body uses that same rule. Each installer also refuses a target that does not bind the names its injected code calls at runtime (`logger` and `MessageType` in `base.py`; `logger`, the module imports, `_load_gateway_runtime_config`, and `cfg_get` in `run.py`), because a missing name would raise at the first busy follow-up instead of at install time. Reverse does not apply that check: it removes those calls, so an already installed patch can still be uninstalled when the names are missing. `--check` creates no backup, bytecode, or temporary file, and it evaluates the read-only preconditions for the inspected state: it syntax-checks the exact bytes an apply would write, it resolves the recovery copy that write would need, refusing with exit code 3 and the same reason when a copy already on disk is not one the write may reuse, and it refuses when the target directory fails the access check for staging. This is a point-in-time preflight, not a guarantee that a later write succeeds: disk space, ownership changes, filesystem errors, or another writer can still make apply abort. Apply repeats its target guards and handles actual staging and replacement failures. Successful checks print `APPLICABLE`, `UPGRADE_APPLICABLE` for a router or debounce flush-body upgrade, or `ALREADY_PATCHED`; reverse checks print `REVERSIBLE`, or `ALREADY_UNPATCHED` when no patch remains. Exit code 2 means an incompatible target or argument. Exit code 3 means a staging, compile, recovery, or target-change failure. Replacement is not a transaction with an unrelated concurrent writer, so stop other writers first.
 
 ## Reverse and recover
 
@@ -64,9 +76,9 @@ python3 patches/apply_debounce_fifo_patch.py /path/to/hermes/gateway/platforms/b
 python3 patches/apply_busy_overflow_router_patch.py /path/to/hermes/gateway/run.py --reverse
 ```
 
-Backups are adjacent to the originals as `*.bak-pre-debouncefifo` and `*.bak-pre-overflowrouter`. Existing backups are never overwritten. An exact recovery copy may be reused after a reverse and reapply; a different existing copy aborts the write. Router upgrades preserve the prior installed source in `.upgrade`, and later upgrades in `.upgrade.2`, `.upgrade.3`, and so on, so each generation stays recoverable and no upgrade is locked out by an earlier one. A debounce flush-body upgrade uses those same slot names beside `*.bak-pre-debouncefifo`, and leaves the original recovery copy untouched. Reversal preserves the patched source in `.reverse`. Reversal changes only the exact current patch, so unrelated source edits remain; an edited or older router block aborts. Restart the gateway after reversal. See the [case study](docs/CASE_STUDY.md) for the fallback and cancellation tradeoffs.
+Backups are adjacent to the originals as `*.bak-pre-debouncefifo` and `*.bak-pre-overflowrouter`. Existing backups are never overwritten. An exact recovery copy may be reused after a reverse and reapply; a different existing copy aborts the write. Router upgrades preserve the prior installed source in `.upgrade`, and later upgrades in `.upgrade.2`, `.upgrade.3`, and so on, so each generation stays recoverable and no upgrade is locked out by an earlier one. A debounce flush-body upgrade uses those same slot names beside `*.bak-pre-debouncefifo`, and leaves the original recovery copy untouched. Reversal preserves the patched source in `.reverse`. Reversal changes only the exact current patch, so unrelated source edits remain; an edited or older router block aborts. Before manual recovery, compare the installed file with the original backup and each `.upgrade` generation, record their hashes, and identify which generation contains the intended pre-change source. Never copy a backup over unrelated edits blindly; prefer exact `--reverse` when it is applicable. Restart the gateway after reversal. See the [case study](docs/CASE_STUDY.md) for the fallback and cancellation tradeoffs.
 
-## Compatibility and evidence
+## Pinned fixture and evidence
 
 The supported source snapshot is [d7b36070ef807841699ad32c5b6af547fee3ff64](https://github.com/NousResearch/hermes-agent/commit/d7b36070ef807841699ad32c5b6af547fee3ff64), selected on 20-07-2026. The pinned validator requires these exact source hashes before it uses disposable copies:
 
@@ -76,6 +88,8 @@ gateway/run.py             36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3
 ```
 
 `tests/validate_upstream.py` checks apply, check, reverse, and reapply, then exercises selected real FIFO and debounce methods with synthetic events. It never downloads source, imports an installed gateway, or edits the supplied fixture.
+
+A separate `pinned-source` CI job downloads only these two files from that exact public revision, verifies both hashes before executing any extracted upstream code, and runs this validator on disposable copies. It does not fetch mutable main or use deployed source.
 
 Supply a directory containing the pinned `base.py` and `run.py` directly (without the `gateway/` subdirectories), then run:
 

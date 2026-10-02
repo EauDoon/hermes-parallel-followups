@@ -230,6 +230,37 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.runner._background_tasks)
         self.assertFalse(getattr(self.runner, "_overflow_router_tasks", {}))
 
+    async def test_cancellation_resistant_ack_keeps_ownership_until_it_finishes(self):
+        canceled, release = asyncio.Event(), asyncio.Event()
+
+        async def resistant(**kwargs):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                canceled.set()
+                await release.wait()
+
+        self.runner.adapter._send_with_retry = resistant
+        self.runner._OVR_ACK_TIMEOUT_SECONDS = 0.01
+        CONFIG["busy_overflow_max_per_session"] = 1
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        owner = next(iter(self.runner._background_tasks))
+        try:
+            await asyncio.wait_for(canceled.wait(), timeout=1.0)
+            self.assertFalse(owner.done())
+            self.assertFalse(self.runner.prompts)
+            self.assertIn(owner, self.runner._overflow_router_tasks)
+            self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        finally:
+            # The deliberately resistant child always gets a bounded cleanup.
+            release.set()
+            self.runner.release.set()
+            await asyncio.wait_for(asyncio.gather(owner, return_exceptions=True), timeout=1.0)
+        owner.result()
+        self.assertEqual(len(self.runner.prompts), 1)
+        self.assertFalse(self.runner._background_tasks)
+        self.assertFalse(self.runner._overflow_router_tasks)
+
 
 if __name__ == "__main__":
     unittest.main()

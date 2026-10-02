@@ -1,8 +1,8 @@
 """The pinned-source gate must fail loudly and actionably on a wrong fixture.
 
-CI has no upstream fixture, so these refusal paths are the only part of
-tests/validate_upstream.py that runs in the offline suite. The happy path
-still needs the real revision and stays out of scope here.
+These refusal paths run without a fixture in the offline suite. A separate
+pinned-source CI job verifies the real revision's happy path; these tests
+remain independent of network availability.
 """
 from pathlib import Path
 import subprocess

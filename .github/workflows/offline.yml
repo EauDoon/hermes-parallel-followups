@@ -14,10 +14,44 @@ jobs:
         python: ['3.10', '3.11', '3.12', '3.13', '3.14']
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
       - run: python tests/run_offline.py
+
+  pinned-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - name: Verify pinned public source before lifecycle checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          import subprocess
+          import sys
+          import tempfile
+          import urllib.request
+          sys.path.insert(0, "tests")
+          from validate_upstream import HASHES, PIN
+          paths = {"base.py": "gateway/platforms/base.py", "run.py": "gateway/run.py"}
+          with tempfile.TemporaryDirectory() as directory:
+              for name, source in paths.items():
+                  url = f"https://raw.githubusercontent.com/NousResearch/hermes-agent/{PIN}/{source}"
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      raw = response.read(5_000_001)
+                  if len(raw) > 5_000_000 or hashlib.sha256(raw).hexdigest() != HASHES[name]:
+                      raise SystemExit(f"Pinned source hash mismatch: {name}")
+                  (Path(directory) / name).write_bytes(raw)
+              subprocess.run([sys.executable, "tests/validate_upstream.py", directory], check=True, timeout=90)
+          PY
