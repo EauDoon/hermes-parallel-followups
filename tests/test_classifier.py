@@ -156,7 +156,8 @@ MUST_Q = [
     "how does the for\x08mer compare with geothermal power",
     # A combining grapheme joiner is not a format character or a control,
     # but it still splits "former" so the phrase match never sees it.
-    # NFD "São" recomposes under NFKC and stays in the background cases.
+    # The NFD "Sa" + U+0303 + "o" background case recomposes to "São" under
+    # NFKC, so it is not queued for carrying a mark.
     "how does the for\u034fmer compare with geothermal power today",
     "what is the population of Oslo and al\x08so Bergen today",
     "What are the implications of the conclusion?\n> earlier response",

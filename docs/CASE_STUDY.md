@@ -2,7 +2,7 @@
 
 This case study explains one narrow debugging result: a busy Hermes session can turn several separate follow-ups into one unlabeled turn. It records the smallest effective fix, the safety fallbacks around it, and the local evidence that can be reproduced without an installed Hermes gateway.
 
-**Evidence status:** offline checks and the pinned-source lifecycle/FIFO validator passed on 02-10-2026 with Python 3.12.14 on Windows. The public fixture hashes matched before execution; live gateway checks were not run. The offline suite skipped five host-dependent installer cases. Earlier results below retain their original dates and scope.
+**Evidence status:** section 5 records the offline run and section 6 the pinned-source gate run, both for the changes in this version. Live gateway checks were not run.
 
 ## 1. The symptom
 
@@ -62,13 +62,15 @@ The router has its own conservative limits:
 - The acknowledgment and generation share one owned task. After five seconds the owner requests acknowledgment cancellation and awaits cleanup. Supported adapters must honor cancellation. A cancellation-resistant adapter retains its owned task and capacity slot until cleanup finishes; the deadline is not a hard elapsed-time bound. A send failure still permits generation, while owner cancellation prevents generation after acknowledgment cleanup. Completed, failed, and canceled tasks release capacity. Failed generation is observed and is not retried.
 - Background work uses the main model, so enabling it can add concurrent provider calls and rate-limit pressure.
 
+The cancellation-resistance regression uses an explicitly releasable synthetic child and bounded test cleanup. It verifies retained ownership, no generation before cleanup, no capacity reuse while the child remains active, and exactly one generation afterward. It does not certify a live adapter implementation.
+
 These choices make a false queue classification slower, while a false background classification can answer a context-dependent question without the conversation that explains it.
 
 ### Classifier detail
 
 The classifier is shape-based and makes no extra model call. In `independent` mode it queues a message when it finds a back-reference such as `(2)`, `(b)`, `option 2`, `option B`, `as you said`, `what about`, `the former`, `the first answer`, `what did we decide`, or `also`; a continuation opener such as `ok`, `leave`, `implement`, or `instead`; a deictic token such as `it`, `this`, `that`, or `ones`; an artifact-mutating verb such as `amend`, `edit`, `update`, or `bold`; fewer than 25 characters; no interrogative opener; or fewer than two content words.
 
-Regression cases cover existential `there`, apostrophe normalization in `what's`, and the time idiom `these days`. Format characters and the other controls (backspace, DEL) queue, because they can hide a contextual token; newline, carriage return, and tab do not. A combining mark that NFKC does not fold into a letter queues for the same reason; a mark that recomposes, as in NFD "São", does not. First-person back-references are matched together with their verb, so `what did we decide`, `which model did we pick`, `why don't we`, `should we`, and `what should we do` queue while an ordinary question that merely mentions the US, or asks to be told about a fact, stays routable. `did you recommend`, `did you decide`, and `did you say` queue as well: the pattern used to match only `you recommended`, which is not how the question is asked, so the grammatical form was backgrounded. A fresh request such as `can you recommend` stays routable. The user's own earlier words and the assistant's earlier output are matched the same way: `what did I say`, `did I mention`, `I said`, `the figure you quoted`, and `the dataset you loaded` queue. Present-tense how-to questions such as `how do I choose a laptop` and impersonal hypotheticals such as `what happens if you used bleach` stay routable, because they ask about the world rather than the conversation. References to the assistant's own output queue too: `your` followed by answer, reply, response, summary, output, table, chart, figure or figures, numbers, list, calculation, math, draft, or script, and `the`, `my`, or `our` followed by script, spreadsheet, attachment, screenshot, diff, dataset, email, table, chart, summary, output, log or logs, proposal, or spec. The second form has a preposition guard: a noun followed by of, for, from, in, on, to, at, with, between, or about usually names a general thing (`the output of a solar panel`, `the chart of accounts`, `the spec for usb power delivery`), so it stays routable. `your opinion` and `your recommendation` ask for a new answer and stay routable as well. `what's our` and `what's my` are expanded to `what is our` and `what is my` before that scan, because the contraction was an interrogative opener and still missed the first-person pattern; `what's the difference` stays routable. Several safe residuals remain, and each is queued rather than answered cold. `why is it there` stays queued because parsing is needed to distinguish its pronoun from a back-reference, and `the former champions of the Tour de France` stays queued because a phrase match cannot tell the pronoun from the adjective. An artifact noun inside a compound (`the email protocol smtp`, `the output voltage of a usb port`) queues because the guard looks only at the next word. Ordinals (`the 18th century`, `the 3rd place`), `earlier` (`what happened earlier in the history of the roman empire`), and `also` (`what is also known as the morning star`) queue for the same kind of reason. These cost parallelism, not correctness. The optional transcript command reads SQLite in read-only mode and prints aggregate counts only.
+Regression cases cover existential `there`, apostrophe normalization in `what's`, and the time idiom `these days`. Format characters and the other controls (backspace, DEL) queue, because they can hide a contextual token; newline, carriage return, and tab do not. A combining mark that NFKC does not fold into a letter queues for the same reason; a mark that recomposes does not: the NFD test input, "Sa" followed by U+0303 and "o", becomes "São" under NFKC and stays routable. First-person back-references are matched together with their verb, so `what did we decide`, `which model did we pick`, `why don't we`, `should we`, and `what should we do` queue while an ordinary question that merely mentions the US, or asks to be told about a fact, stays routable. `did you recommend`, `did you decide`, and `did you say` queue as well: the pattern used to match only `you recommended`, which is not how the question is asked, so the grammatical form was backgrounded. A fresh request such as `can you recommend` stays routable. The user's own earlier words and the assistant's earlier output are matched the same way: `what did I say`, `did I mention`, `I said`, `the figure you quoted`, and `the dataset you loaded` queue. Present-tense how-to questions such as `how do I choose a laptop` and impersonal hypotheticals such as `what happens if you used bleach` stay routable, because they ask about the world rather than the conversation. References to the assistant's own output queue too: `your` followed by answer, reply, response, summary, output, table, chart, figure or figures, numbers, list, calculation, math, draft, or script, and `the`, `my`, or `our` followed by script, spreadsheet, attachment, screenshot, diff, dataset, email, table, chart, summary, output, log or logs, proposal, or spec. The second form has a preposition guard: a noun followed by of, for, from, in, on, to, at, with, between, or about usually names a general thing (`the output of a solar panel`, `the chart of accounts`, `the spec for usb power delivery`), so it stays routable. `your opinion` and `your recommendation` ask for a new answer and stay routable as well. `what's our` and `what's my` are expanded to `what is our` and `what is my` before that scan, because the contraction was an interrogative opener and still missed the first-person pattern; `what's the difference` stays routable. Several safe residuals remain, and each is queued rather than answered cold. `why is it there` stays queued because parsing is needed to distinguish its pronoun from a back-reference, and `the former champions of the Tour de France` stays queued because a phrase match cannot tell the pronoun from the adjective. An artifact noun inside a compound (`the email protocol smtp`, `the output voltage of a usb port`) queues because the guard looks only at the next word. Ordinals (`the 18th century`, `the 3rd place`), `earlier` (`what happened earlier in the history of the roman empire`), and `also` (`what is also known as the morning star`) queue for the same kind of reason. These cost parallelism, not correctness. The optional transcript command reads SQLite in read-only mode and prints aggregate counts only.
 
 ## 5. Reproduce the offline case
 
@@ -80,22 +82,24 @@ From the repository root, run:
 python3 tests/run_offline.py
 ```
 
-The recorded Windows run used Python 3.12.10 on 28-09-2026. Use your verified Python interpreter to run the same command above.
-
-Recorded result:
+Recorded run on 09-10-2026: Windows 11 (build 26200), Python 3.12.10 (`py --version`). The same command also passed with CPython 3.11.15 and 3.14.7 on that machine, and CI runs it on Linux and Windows with Python 3.10 to 3.14.
 
 ```text
-classifier: 52 cases, ALL PASS
-router integration: 13 cases, 0 failures
-test_router_lifecycle.py: 13 tests, OK
-test_patch_installers.py: 17 tests, OK (skipped=4)
-test_patch_workflows.py: 5 tests, OK
+test_classifier.py: 115 cases, ALL PASS
+test_router.py: 13 cases, 0 failures
+test_router_lifecycle.py: 18 tests, OK
+test_patch_installers.py: 26 tests, OK (skipped=5)
+test_patch_workflows.py: 9 tests, OK
 test_transcript_scan.py: 4 tests, OK
-test_validate_upstream.py: 2 tests, OK
+test_validate_upstream.py: 9 tests, OK
+test_debounce_flush.py: 8 tests, OK
+test_installer_parity.py: 8 tests, OK
+test_installed_hermes_guard.py: 1 test, OK
+test_versioning.py: 6 tests, OK
 OFFLINE_CHECKS_OK
 ```
 
-The four skipped installer checks are Windows symlink cases that require symlink privilege. Linux CI exercises those cases. The offline result is synthetic evidence for the injected logic and installer behavior. It is not evidence of gateway startup, message delivery, model calls, throughput, or a production deployment.
+The five skips are host-dependent. Four are Windows symlink subtests that need symlink privilege (a symlinked target and a symlinked recovery copy, once per installer). One is the POSIX directory-mode test, which does not apply on Windows. Linux CI runs all five. The offline result is synthetic evidence for the injected logic and installer behavior. It is not evidence of gateway startup, message delivery, model calls, throughput, or a production deployment.
 
 ## 6. Source compatibility boundary
 
@@ -109,7 +113,7 @@ gateway/authz_mixin.py     bfe908efbe0504d3803571195cee92ac6717d9c5a0eda81e79549
 
 The pinned-source CI job and a local reproduction use the same script. `python3 tests/fetch_pinned_source.py ./upstream-fixture` downloads the files from the public revision without credentials and verifies every hash before writing anything; `python3 tests/validate_upstream.py ./upstream-fixture` then runs the gate. CI passes `--validate` to do both in one step.
 
-That fixture gate was not run in the local check above because no matching public source fixture was supplied. Its refusal paths, which need no upstream source, run in the offline suite as `test_validate_upstream.py`. The separate pinned-source CI job now downloads the three exact public files, checks the recorded hashes, and exercises the happy path in disposable copies; a particular run must succeed before it counts as evidence. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks require an installed Hermes at `/opt/hermes` and were not run.
+The offline suite runs the gate's refusal paths and its static contract checks on synthetic sources, which need no upstream source, as `test_validate_upstream.py`; the local run in section 5 did not download the fixture. The happy path is recorded from CI. In pull request run [37933190805](https://github.com/EauDoon/hermes-parallel-followups/actions/runs/37933190805) on 09-10-2026, for commit 19d0886, the pinned-source job downloaded the three files, matched all three hashes, and printed `PINNED_CONTRACT_OK`, `PINNED_FIFO_OK`, and `PINNED_LIFECYCLE_OK d7b36070ef807841699ad32c5b6af547fee3ff64`. A later change needs its own successful run before it counts as evidence. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks need a patched Hermes from `HERMES_ROOT` and were not run against one; the offline suite checks only that they refuse cleanly without it.
 
 Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResearch/hermes-agent/commit/ed2d821021e073425994544dca292d36a12cf4a3), checked on 09-09-2026, has a different runner structure. The router installer refuses it because its required hook is absent. Compatibility with that revision and newer releases is unsupported. An anchor failure must not be bypassed.
 
@@ -117,7 +121,7 @@ Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResea
 
 Both installers are standalone and idempotent. They require exact source anchors, refuse symlinks and non-regular targets, stage and compile before replacement, detect target changes, and use atomic replacement. `--check` is read-only. A failed staging, compile, recovery, or target-change check leaves the target unchanged.
 
-Before applying or reversing, stop the gateway and other writers of the target files. Backups stay beside the originals as `*.bak-pre-debouncefifo` and `*.bak-pre-overflowrouter`; existing backups are not overwritten. A matching recovery copy can be reused after reverse and reapply. Router upgrades retain the prior installed source in `.upgrade`, and a debounce flush-body upgrade does the same beside its own backup. Reversal retains the patched source in `.reverse`. Reverse only the exact current patch and restart the gateway afterwards.
+Before applying or reversing, stop the gateway and other writers of the target files. Backups stay beside the originals as `*.bak-pre-debouncefifo` and `*.bak-pre-overflowrouter`; existing backups are not overwritten. A matching recovery copy can be reused after reverse and reapply. Router upgrades retain the prior installed source in `.upgrade`, and a debounce flush-body upgrade does the same beside its own backup. Up to eight upgrade generations are kept (`.upgrade`, then `.upgrade.2` to `.upgrade.8`); a ninth upgrade aborts until those copies are preserved or relocated. Reversal retains the patched source in `.reverse`. Reverse only the exact current patch and restart the gateway afterwards.
 
 The full commands and exit-code meanings are in the [README](../README.md). The source and installer behavior remain version-specific by design.
 
@@ -126,8 +130,3 @@ The full commands and exit-code meanings are in the [README](../README.md). The 
 MIT. See [LICENSE](../LICENSE).
 
 Hermes Agent is MIT licensed, Copyright (c) 2025 Nous Research. This repository is a derivative work that quotes small portions of Hermes source for context. It is an independent contribution and is not affiliated with or endorsed by Nous Research.
-
-The cancellation-resistance regression uses an explicitly releasable synthetic
-child and bounded test cleanup. It verifies retained ownership, no generation
-before cleanup, no capacity reuse while the child remains active, and exactly
-one generation afterward. It does not certify a live adapter implementation.
