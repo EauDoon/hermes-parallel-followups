@@ -78,8 +78,8 @@ class ValidateUpstreamTests(unittest.TestCase):
             directory = Path(td)
             checkout = directory / "checkout"
             (checkout / "gateway" / "platforms").mkdir(parents=True)
-            (checkout / "gateway" / "platforms" / "base.py").write_text("x = 1\n")
-            (checkout / "gateway" / "run.py").write_text("y = 2\n")
+            (checkout / "gateway" / "platforms" / "base.py").write_text("x = 1\n", encoding="utf-8")
+            (checkout / "gateway" / "run.py").write_text("y = 2\n", encoding="utf-8")
             empty = directory / "empty"
             empty.mkdir()
             cases = {
@@ -90,7 +90,7 @@ class ValidateUpstreamTests(unittest.TestCase):
             }
             stray = directory / "stray"
             stray.mkdir()
-            (stray / "base.py").write_text("x = 1\n")
+            (stray / "base.py").write_text("x = 1\n", encoding="utf-8")
             cases["truncated-file"] = stray
 
             for name, source in cases.items():
@@ -109,8 +109,8 @@ class ValidateUpstreamTests(unittest.TestCase):
         # expected to fail on the hash, never on the layout check.
         with tempfile.TemporaryDirectory() as td:
             directory = Path(td)
-            (directory / "base.py").write_text("# not the pinned revision\n")
-            (directory / "run.py").write_text("# not the pinned revision\n")
+            (directory / "base.py").write_text("# not the pinned revision\n", encoding="utf-8")
+            (directory / "run.py").write_text("# not the pinned revision\n", encoding="utf-8")
 
             result = validate(directory)
 

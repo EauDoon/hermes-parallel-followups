@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "patches/apply_busy_overflow_router_patch.py"
-BLOCK = next(ast.literal_eval(node.value) for node in ast.parse(SCRIPT.read_text()).body
+BLOCK = next(ast.literal_eval(node.value) for node in ast.parse(SCRIPT.read_text(encoding="utf-8")).body
              if isinstance(node, ast.Assign)
              and any(isinstance(target, ast.Name) and target.id == "BLOCK" for target in node.targets))
 CONFIG = {"busy_overflow_background": "independent"}
