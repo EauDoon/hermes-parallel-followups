@@ -58,7 +58,7 @@ The router has its own conservative limits:
 
 - `independent` routes only text that looks self-contained. `all` can route contextual text and therefore has a higher cold-context risk.
 - A background agent starts without conversation history, and its answer is not written into the main transcript. In `independent` mode, ambiguous, corrective, artifact-mutating, quoted, media, command, internal, empty, and short messages stay queued. `all` relaxes the classifier for contextual text.
-- The default cap is two overflow tasks per session and eight across the runner. Zero disables dispatch. Invalid values fail closed to queueing.
+- The default cap is two overflow tasks per session and eight across the runner. Zero disables dispatch. A value outside 0 to 32 per session or 0 to 128 in total, or one that is not an integer, fails closed to queueing and logs one warning per distinct value, so the operator can see why nothing runs in parallel.
 - The acknowledgment and generation share one owned task. After five seconds the owner requests acknowledgment cancellation and awaits cleanup. Supported adapters must honor cancellation. A cancellation-resistant adapter retains its owned task and capacity slot until cleanup finishes; the deadline is not a hard elapsed-time bound. A send failure still permits generation, while owner cancellation prevents generation after acknowledgment cleanup. Completed, failed, and canceled tasks release capacity. Failed generation is observed and is not retried.
 - Background work uses the main model, so enabling it can add concurrent provider calls and rate-limit pressure.
 

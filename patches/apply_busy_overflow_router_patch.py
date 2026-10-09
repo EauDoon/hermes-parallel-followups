@@ -379,9 +379,25 @@ BLOCK = '''    # ---------------------------------------------------------------
             raw = cfg_get(_load_gateway_runtime_config(), "display", key, default=default)
         except Exception:
             return 0
-        if isinstance(raw, bool) or not isinstance(raw, int):
-            return 0
-        return raw if 0 <= raw <= maximum else 0
+        if not isinstance(raw, bool) and isinstance(raw, int) and 0 <= raw <= maximum:
+            return raw
+        # An invalid value used to disable dispatch with no trace, so an
+        # operator could not tell why nothing ran in parallel. Warn once per
+        # key and value. The warning is advice only: nothing in it may change
+        # the fail-closed result.
+        try:
+            marker = (key, repr(raw))
+            seen = self.__dict__.setdefault("_ovr_invalid_limits", set())
+            if marker not in seen:
+                seen.add(marker)
+                logger.warning(
+                    "Busy-overflow display.%s=%r is not an integer from 0 "
+                    "to %d; parallel dispatch is disabled",
+                    key, raw, maximum,
+                )
+        except Exception:
+            pass
+        return 0
 
     async def _run_overflow_background(self, adapter, event, text, task_id, anchor):
         """One owned task covers acknowledgment and generation, including cancellation."""

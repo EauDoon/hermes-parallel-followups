@@ -30,6 +30,14 @@ display:
   busy_overflow_max_total: 8
 ```
 
+| Key | Accepted values | Default |
+| --- | --- | --- |
+| `busy_overflow_background` | `off`, `independent`, or `all`. `true`, `yes`, and `on`, including the YAML booleans they load as, mean `independent`. Anything else means `off`. | `off` |
+| `busy_overflow_max_per_session` | An integer from 0 to 32 | 2 |
+| `busy_overflow_max_total` | An integer from 0 to 128 | 8 |
+
+A limit that is out of range or not an integer disables dispatch, and the gateway log gets one warning for each distinct invalid value. Zero is a valid limit that disables dispatch without a warning.
+
 `independent` routes only self-contained questions. `all` also routes contextual text and carries more correctness risk because a background agent starts without conversation history. Commands, media, internal events, empty text, and explicit reply events remain queued. Invalid limits fail closed, zero disables dispatch, and completed, failed, or canceled tasks release capacity. Acknowledgment cancellation is requested after five seconds. Supported adapters must cooperate with cancellation; the router awaits their cleanup while retaining the task and its capacity slot. An adapter that suppresses cancellation can exceed that deadline, so this is not a hard end-to-end timeout. Cancellation does not send the same event through both lanes.
 
 The router key is custom. `hermes config set` may warn that it is not recognized; the patch reads it directly.

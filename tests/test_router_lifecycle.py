@@ -81,12 +81,54 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
         self.assertEqual(len({task_id for _, task_id in self.runner.prompts}), len(self.runner.prompts))
 
+    async def assert_limit_rejected(self, key, value, maximum):
+        """The value disables dispatch, and warns unless it is an explicit zero."""
+        CONFIG[key] = value
+        if value == 0:
+            with self.assertNoLogs(namespace["logger"], "WARNING"):
+                self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+            return
+        with self.assertLogs(namespace["logger"], "WARNING") as logs:
+            self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        self.assertEqual(len(logs.output), 1, logs.output)
+        self.assertIn("display.%s=%r" % (key, value), logs.output[0])
+        self.assertIn("from 0 to %d" % maximum, logs.output[0])
+
     async def test_bad_limits_fail_closed(self):
         for value in (0, -1, 33, True, "2", None, 1.5):
             with self.subTest(value=value):
-                CONFIG["busy_overflow_max_per_session"] = value
-                self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+                await self.assert_limit_rejected("busy_overflow_max_per_session", value, 32)
         self.assertFalse(self.runner._background_tasks)
+
+    async def test_invalid_limit_warns_once_per_value(self):
+        # The warning explains why nothing runs in parallel. Repeating it on
+        # every busy follow-up would flood the log, so each value warns once.
+        CONFIG["busy_overflow_max_total"] = 200
+        with self.assertLogs(namespace["logger"], "WARNING") as logs:
+            for _ in range(2):
+                self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        self.assertEqual(len(logs.output), 1, logs.output)
+        self.assertIn("busy_overflow_max_total=200", logs.output[0])
+        CONFIG["busy_overflow_max_total"] = 300
+        with self.assertLogs(namespace["logger"], "WARNING") as logs:
+            self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        self.assertEqual(len(logs.output), 1, logs.output)
+        self.assertFalse(self.runner._background_tasks)
+
+    async def test_failing_limit_warning_still_fails_closed(self):
+        class BrokenLogger:
+            def warning(self, *args, **kwargs):
+                raise RuntimeError("log sink down")
+
+        CONFIG["busy_overflow_max_total"] = 200
+        saved = namespace["logger"]
+        namespace["logger"] = BrokenLogger()
+        try:
+            self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        finally:
+            namespace["logger"] = saved
+        self.assertFalse(self.runner._background_tasks)
+        self.assertFalse(getattr(self.runner, "_overflow_router_tasks", {}))
 
     async def test_other_sessions_have_independent_capacity(self):
         results = [await self.runner._maybe_route_overflow_to_background(event(), str(i)) for i in range(4)]
@@ -107,8 +149,9 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_total_limit_disables_parallel_work(self):
         for value in (0, -1, 129, True, "8", None):
-            CONFIG["busy_overflow_max_total"] = value
-            self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+            with self.subTest(value=value):
+                await self.assert_limit_rejected("busy_overflow_max_total", value, 128)
+        self.assertFalse(self.runner._background_tasks)
 
     async def test_ack_failure_does_not_duplicate_or_drop_dispatch(self):
         async def fail(**kwargs):
