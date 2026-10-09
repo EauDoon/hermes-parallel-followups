@@ -80,6 +80,26 @@ MUST_BG = [
     # A newline is ordinary text. Backspace and DEL are not, and are covered
     # with the queued cases below.
     "what is the population of Ulaanbaatar today\nand why does the census matter for planning",
+    # "did I say" asks about the turn in flight. Present "do I" plus a verb is
+    # a how-to question about the world and stays routable, as do "should I"
+    # and "what should I say to" a third party.
+    "how do I make sourdough bread rise more in winter",
+    "how should I invest for retirement in my thirties",
+    "can you explain how a heat pump works in winter",
+    "what language should I learn first for data science",
+    "how do I choose a laptop for programming on a budget",
+    "how do I pick a ripe watermelon at the grocery store",
+    "how do I decide between two job offers in different cities",
+    "how do I write a cover letter for a data analyst role",
+    "how do I attach a file to an email on an iphone",
+    "how do I send a large video file to a friend",
+    "how do I recall an email I sent by mistake in outlook",
+    "what should I say to a landlord about a late rent payment",
+    # "the X you produced" is a back-reference. An impersonal "if you ran" or
+    # "if you used" is a hypothetical about anyone, not about this assistant.
+    "what happens to the body if you ran a marathon untrained",
+    "what happens if you used bleach on colored clothes",
+    "what if you made a mistake on a tax return last year",
 ]
 
 MUST_Q = [
@@ -164,6 +184,16 @@ MUST_Q = [
     "why did you recommend the smaller model for the summary task",
     "what did you decide about the timeout configuration",
     "what did you say about monetary policy in the seventies",
+    # The user's own earlier words and the assistant's earlier output are
+    # only in the conversation. "did I", "I said" and "the figure you quoted"
+    # were all answered cold.
+    "what did I say about the deadline for the launch",
+    "did I mention the budget limit for the offsite",
+    "what did I ask you to change in the proposal",
+    "how accurate is the estimate you produced for revenue",
+    "what were the results you found for the regression",
+    "how many rows are in the dataset you loaded",
+    "what is the source for the figure you quoted",
 ]
 
 fails = []

@@ -269,6 +269,13 @@ BLOCK = '''    # ---------------------------------------------------------------
                 # country is not read as the pronoun.
                 r"|\\b(?:what|how|why|which|where|when|who)\\b(?:\\s+(?!we\\b|us\\b|our\\b|my\\b)\\w+){0,4}\\s+(?:did|do|does|are|is|was|were|should|would|could|have|has|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|hasn't|hasnt|isn't|isnt|aren't|arent|wasn't|wasnt|weren't|werent|shouldn't|shouldnt|wouldn't|wouldnt|couldn't|couldnt|can't|cant|won't|wont)\\s+(?:we|our|my)\\b"
                 r"|\\b(?:should|would|could|can|do|does|did|are|is|was|were|have|has|will|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|isn't|isnt|aren't|arent|can't|cant|won't|wont)\\s+(?:we|our|my)\\b"
+                # A cold agent cannot see what the user said earlier, or what the
+                # assistant produced. "did I"/"have I" plus a verb, "I said", and
+                # "the X you produced" all point back into the turn in flight.
+                # Present "do I choose" is a how-to question and stays routable.
+                r"|\\b(?:did|have|had)\\s+I\\s+(?:say|mention|ask|tell|send|share|give|write|upload|attach|paste|decide|choose|pick|agree|mean)\\b"
+                r"|\\bI\\s+(?:said|mentioned|asked|told|wrote|meant|pasted)\\b"
+                r"|\\bthe\\s+\\w+(?:\\s+(?!if\\b|when\\b|whenever\\b|once\\b|after\\b|before\\b|because\\b|unless\\b|until\\b|and\\b|or\\b)\\w+)?\\s+you\\s+(?:showed|shown|quoted|cited|found|loaded|ran|used|made|created|built|listed|produced|generated|computed|calculated|estimated|provided|described|explained|proposed|drafted|shared|sent|linked|picked|chose|gave|wrote|mentioned|suggested|recommended)\\b"
                 r"|\\b(above|earlier|previous|previously)\\b"
                 r"|\\bthe\\s+(?:former|latter)\\b"
                 # "the last answer" was queued. "the first answer" and "the
