@@ -99,16 +99,17 @@ The four skipped installer checks are Windows symlink cases that require symlink
 
 ## 6. Source compatibility boundary
 
-The supported source snapshot is [d7b36070ef807841699ad32c5b6af547fee3ff64](https://github.com/NousResearch/hermes-agent/commit/d7b36070ef807841699ad32c5b6af547fee3ff64), selected on 20-07-2026. `tests/validate_upstream.py` is the source gate. It requires these exact hashes, applies both patches to disposable copies, checks reverse and reapply, and runs selected real FIFO and debounce methods with synthetic events:
+The supported source snapshot is [d7b36070ef807841699ad32c5b6af547fee3ff64](https://github.com/NousResearch/hermes-agent/commit/d7b36070ef807841699ad32c5b6af547fee3ff64), selected on 20-07-2026. `tests/validate_upstream.py` is the source gate. It requires these exact hashes, then statically checks every upstream member the patches call, including `_adapter_for_source`, which `GatewayRunner` inherits from `gateway/authz_mixin.py`, the bound busy handler the debounce flush reaches the runner through, and the router's post-dispatch calls. It then applies both patches to disposable copies, checks reverse and reapply, and runs selected real FIFO and debounce methods with synthetic events:
 
 ```text
 gateway/platforms/base.py  6bfdf20de31ae01fbd088457b91252d2430f9bc45d0a84ba132590be54fc909f
 gateway/run.py             36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3767dddbda89
+gateway/authz_mixin.py     bfe908efbe0504d3803571195cee92ac6717d9c5a0eda81e79549f8bff61b11f
 ```
 
 The pinned-source CI job and a local reproduction use the same script. `python3 tests/fetch_pinned_source.py ./upstream-fixture` downloads the files from the public revision without credentials and verifies every hash before writing anything; `python3 tests/validate_upstream.py ./upstream-fixture` then runs the gate. CI passes `--validate` to do both in one step.
 
-That fixture gate was not run in the local check above because no matching public source fixture was supplied. Its refusal paths, which need no upstream source, run in the offline suite as `test_validate_upstream.py`. The separate pinned-source CI job now downloads the two exact public files, checks the recorded hashes, and exercises the happy path in disposable copies; a particular run must succeed before it counts as evidence. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks require an installed Hermes at `/opt/hermes` and were not run.
+That fixture gate was not run in the local check above because no matching public source fixture was supplied. Its refusal paths, which need no upstream source, run in the offline suite as `test_validate_upstream.py`. The separate pinned-source CI job now downloads the three exact public files, checks the recorded hashes, and exercises the happy path in disposable copies; a particular run must succeed before it counts as evidence. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks require an installed Hermes at `/opt/hermes` and were not run.
 
 Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResearch/hermes-agent/commit/ed2d821021e073425994544dca292d36a12cf4a3), checked on 09-09-2026, has a different runner structure. The router installer refuses it because its required hook is absent. Compatibility with that revision and newer releases is unsupported. An anchor failure must not be bypassed.
 

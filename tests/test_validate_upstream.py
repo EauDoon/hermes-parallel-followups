@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -144,6 +145,161 @@ class ValidateUpstreamTests(unittest.TestCase):
             self.assertNotIn("Traceback", result.stderr)
             self.assertIn("base.py does not match supported public revision " + PIN, result.stderr)
             self.assertEqual(result.stdout, "")
+
+
+# Minimal synthetic upstream that matches the pin's shapes: AnnAssign stores,
+# a keyword-only adapter, a staticmethod reply anchor, and _adapter_for_source
+# inherited from the mixin that comes first in GatewayRunner's bases.
+CONTRACT_BASE = textwrap.dedent("""
+    class BasePlatformAdapter:
+        def __init__(self):
+            self._text_debounce: dict = {}
+            self._busy_session_handler = None
+
+        def set_busy_session_handler(self, handler):
+            self._busy_session_handler = handler
+
+        async def _send_with_retry(self, chat_id, content, reply_to=None, metadata=None, max_retries=2):
+            return None
+""")
+CONTRACT_RUN = textwrap.dedent("""
+    from gateway.authz_mixin import GatewayAuthorizationMixin
+
+
+    class GatewayRunner(GatewayAuthorizationMixin, OtherMixin):
+        def __init__(self):
+            self._background_tasks: set = set()
+
+        def _wire(self, adapter):
+            adapter.set_busy_session_handler(self._handle_active_session_busy_message)
+
+        async def _handle_active_session_busy_message(self, event, session_key):
+            return False
+
+        def _queue_depth(self, session_key, *, adapter=None):
+            return 0
+
+        def _queue_or_replace_pending_event(self, session_key, event):
+            return None
+
+        async def _run_background_task(self, prompt, source, task_id, event_message_id=None, media_urls=None):
+            return None
+
+        def _thread_metadata_for_source(self, source, reply_to_message_id=None):
+            return {}
+
+        @staticmethod
+        def _reply_anchor_for_event(event):
+            return None
+""")
+CONTRACT_AUTHZ = textwrap.dedent("""
+    class GatewayAuthorizationMixin:
+        def _adapter_for_source(self, source):
+            return None
+""")
+
+
+class UpstreamContractTests(unittest.TestCase):
+    def sources(self, **replacements):
+        """The synthetic set, with (old, new) replacements applied per file."""
+        files = {"base.py": CONTRACT_BASE, "run.py": CONTRACT_RUN, "authz_mixin.py": CONTRACT_AUTHZ}
+        for name, (old, new) in replacements.items():
+            name = name.replace("_py", ".py")
+            self.assertEqual(files[name].count(old), 1, (name, old))
+            files[name] = files[name].replace(old, new, 1)
+        return files
+
+    def test_pinned_shapes_and_their_plain_forms_pass(self):
+        variants = {
+            "as-pinned": {},
+            "plain-assign-and-method-anchor": {
+                "base_py": ("self._text_debounce: dict = {}", "self._text_debounce = {}"),
+                "run_py": ("    @staticmethod\n    def _reply_anchor_for_event(event):",
+                           "    def _reply_anchor_for_event(self, event):"),
+            },
+            "runner-defines-the-resolver": {
+                "run_py": ("class GatewayRunner(GatewayAuthorizationMixin, OtherMixin):",
+                           "class GatewayRunner(OtherMixin):\n"
+                           "    def _adapter_for_source(self, source):\n"
+                           "        return None\n"),
+            },
+        }
+        for name, replacements in variants.items():
+            with self.subTest(variant=name):
+                files = self.sources(**replacements)
+                validate_upstream.verify_contract(files["base.py"], files["run.py"], files["authz_mixin.py"])
+
+    def test_each_upstream_drift_is_named(self):
+        mutations = {
+            "no-event-message-id": (
+                {"run_py": ("task_id, event_message_id=None, media_urls=None", "task_id, media_urls=None")},
+                "run.py: GatewayRunner._run_background_task has no parameter event_message_id"),
+            "no-adapter-keyword": (
+                {"run_py": ("def _queue_depth(self, session_key, *, adapter=None):",
+                            "def _queue_depth(self, session_key):")},
+                "run.py: GatewayRunner._queue_depth has no parameter adapter"),
+            "no-metadata": (
+                {"base_py": ("reply_to=None, metadata=None,", "reply_to=None,")},
+                "base.py: BasePlatformAdapter._send_with_retry has no parameter metadata"),
+            "mixin-method-missing": (
+                {"authz_mixin_py": ("def _adapter_for_source(self, source):", "def _adapter_for(self, source):")},
+                "authz_mixin.py: GatewayAuthorizationMixin._adapter_for_source is missing"),
+            "runner-not-inheriting-the-mixin": (
+                {"run_py": ("class GatewayRunner(GatewayAuthorizationMixin, OtherMixin):",
+                            "class GatewayRunner(OtherMixin):")},
+                "run.py: GatewayRunner does not inherit _adapter_for_source from GatewayAuthorizationMixin"),
+            "handler-wrapped-in-a-lambda": (
+                {"run_py": ("adapter.set_busy_session_handler(self._handle_active_session_busy_message)",
+                            "adapter.set_busy_session_handler("
+                            "lambda event, key: self._handle_active_session_busy_message(event, key))")},
+                "passes set_busy_session_handler something other than self._handle_active_session_busy_message"),
+            "debounce-store-renamed": (
+                {"base_py": ("self._text_debounce: dict = {}", "self._debounce_buffers: dict = {}")},
+                "base.py: BasePlatformAdapter no longer assigns self._text_debounce"),
+            "handler-not-stored": (
+                {"base_py": ("self._busy_session_handler = handler", "self._handler = handler")},
+                "set_busy_session_handler no longer stores its handler"),
+            "anchor-needs-two-arguments": (
+                {"run_py": ("def _reply_anchor_for_event(event):", "def _reply_anchor_for_event(event, chat):")},
+                "run.py: GatewayRunner._reply_anchor_for_event requires chat"),
+        }
+        for name, (replacements, message) in mutations.items():
+            with self.subTest(mutation=name):
+                files = self.sources(**replacements)
+                with self.assertRaises(ValueError) as raised:
+                    validate_upstream.verify_contract(files["base.py"], files["run.py"], files["authz_mixin.py"])
+                self.assertIn(message, str(raised.exception))
+                self.assertIn(PIN, str(raised.exception))
+
+    def test_missing_runner_class_fails_cleanly_with_the_revision_named(self):
+        # Unreachable at the pin, where the hash check comes first, but this
+        # is exactly what a pin bump meets. It used to end in a StopIteration
+        # traceback from a bare next().
+        files = self.sources(run_py=("class GatewayRunner(", "class GatewayService("))
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td)
+            for name, text in files.items():
+                (directory / name).write_text(text, encoding="utf-8")
+            hashes = {name: hashlib.sha256((directory / name).read_bytes()).hexdigest() for name in files}
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.object(validate_upstream, "HASHES", hashes), patch("subprocess.run") as lifecycle, \
+                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = validate_upstream.cli([str(directory)])
+        self.assertEqual(code, 1)
+        lifecycle.assert_not_called()
+        self.assertIn("VALIDATION_FAILED: run.py: class GatewayRunner is missing", stderr.getvalue())
+        self.assertIn(PIN, stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+        self.assertNotIn("PINNED_CONTRACT_OK", stdout.getvalue())
+        with self.assertRaises(ValueError) as raised:
+            validate_upstream.selected("x = 1\n", "GatewayRunner", {"_queue_depth"}, "run.py")
+        self.assertIn(PIN, str(raised.exception))
+
+    def test_the_fixture_has_three_files_with_base_first(self):
+        # base.py stays first so a drifted fixture is reported on base.py.
+        self.assertEqual(list(validate_upstream.HASHES), ["base.py", "run.py", "authz_mixin.py"])
+        self.assertEqual(list(validate_upstream.SOURCES), list(validate_upstream.HASHES))
+        self.assertEqual(validate_upstream.SOURCES["authz_mixin.py"], "gateway/authz_mixin.py")
 
 
 if __name__ == "__main__":
