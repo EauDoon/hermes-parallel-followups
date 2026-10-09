@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKS = (
     "test_classifier.py", "test_router.py", "test_router_lifecycle.py",
     "test_patch_installers.py", "test_patch_workflows.py", "test_transcript_scan.py",
-    "test_validate_upstream.py", "test_debounce_flush.py",
+    "test_validate_upstream.py", "test_debounce_flush.py", "test_installer_parity.py",
 )
 # Documented in the README as separate from the offline suite because they
 # import an installed Hermes at /opt/hermes. validate_upstream.py is not

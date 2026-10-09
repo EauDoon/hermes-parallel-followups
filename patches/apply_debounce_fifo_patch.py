@@ -475,6 +475,11 @@ line_ending = "\r\n" if "\r\n" in src else "\n"
 # left the debounce store, so the follow-up is dropped instead of falling back
 # to the merge. The router installer refuses the same class of install for the
 # same reason; refuse here too rather than at the first busy follow-up.
+# tests/test_installer_parity.py derives the names NEW loads that OLD does not
+# and requires them to equal this tuple, so a new runtime name cannot slip in.
+REQUIRED_RUNTIME = ("logger", "MessageType")
+
+
 def _target_binds(target, name):
     if isinstance(target, ast.Name):
         return target.id == name
@@ -503,7 +508,9 @@ def _binds(body, name):
             if _binds(node.body, name) or _binds(node.orelse, name):
                 return True
             continue
-        if isinstance(node, ast.Try):
+        # try/except* (3.11+) has the same fields as try/except. getattr keeps
+        # this parseable and correct on 3.10, which has no TryStar.
+        if isinstance(node, (ast.Try, getattr(ast, "TryStar", ast.Try))):
             parts = [node.body, node.orelse, node.finalbody]
             parts.extend(handler.body for handler in node.handlers)
             if any(_binds(part, name) for part in parts):
@@ -540,7 +547,7 @@ def require_runtime_symbols():
     still be uninstalled. Running this before reverse left the NameError in
     place on a flush an older check had accepted.
     """
-    for required in ("logger", "MessageType"):
+    for required in REQUIRED_RUNTIME:
         if not bound(src, required):
             print("ABORT: base-platform symbol %r is not defined or imported" % required); sys.exit(2)
 

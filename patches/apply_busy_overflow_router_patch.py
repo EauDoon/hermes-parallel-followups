@@ -528,12 +528,20 @@ block_marker = target_text(BLOCK_MARKER)
 block = target_text(BLOCK)
 anchor = target_text(ANCHOR)
 
-def _router_binds(body, name):
+def _target_binds(target, name):
+    if isinstance(target, ast.Name):
+        return target.id == name
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_target_binds(element, name) for element in target.elts)
+    return False
+
+
+def _binds(body, name):
     """True when ``name`` is bound by these module-level statements.
 
-    A docstring, a comment, and an import alias do not bind it. A combined
-    import and a parenthesized import do. Function and class bodies are not
-    module scope.
+    Function and class bodies are not module scope. An annotation with no
+    value, an import alias, and a comment do not bind the name either; a
+    parenthesized import does, because it is still an import.
     """
     for node in body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -541,31 +549,39 @@ def _router_binds(body, name):
                 return True
             continue
         if isinstance(node, (ast.With, ast.AsyncWith)):
-            if _router_binds(node.body, name):
+            if _binds(node.body, name):
                 return True
             continue
         if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While)):
-            if _router_binds(node.body, name) or _router_binds(node.orelse, name):
+            if _binds(node.body, name) or _binds(node.orelse, name):
                 return True
             continue
-        if isinstance(node, ast.Try):
+        # try/except* (3.11+) has the same fields as try/except. getattr keeps
+        # this parseable and correct on 3.10, which has no TryStar.
+        if isinstance(node, (ast.Try, getattr(ast, "TryStar", ast.Try))):
             parts = [node.body, node.orelse, node.finalbody]
             parts.extend(handler.body for handler in node.handlers)
-            if any(_router_binds(part, name) for part in parts):
+            if any(_binds(part, name) for part in parts):
                 return True
             continue
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == name:
-                    return True
-            continue
-        if isinstance(node, ast.AnnAssign) and node.value is not None and isinstance(node.target, ast.Name) and node.target.id == name:
+        if isinstance(node, ast.Assign) and any(_target_binds(target, name) for target in node.targets):
+            return True
+        if isinstance(node, ast.AnnAssign) and node.value is not None and _target_binds(node.target, name):
             return True
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
-                if (alias.asname or alias.name.split(".")[0]) == name:
+                bound_name = alias.asname or alias.name.split(".")[0]
+                if bound_name == name:
                     return True
     return False
+
+
+# The module-level names BLOCK and HOOK_NEW load at runtime. The injected code
+# never uses os, so a run.py without `import os` is not refused for it.
+# tests/test_installer_parity.py derives this set from the injected source,
+# so a new name there fails the suite until it is listed here.
+REQUIRED_IMPORTS = ("re", "time", "asyncio")
+REQUIRED_RUNTIME = ("_load_gateway_runtime_config", "cfg_get", "logger")
 
 
 def require_router_symbols():
@@ -583,11 +599,11 @@ def require_router_symbols():
         tree = ast.parse(src.lstrip("\ufeff"))
     except SyntaxError:
         return
-    for required in ("re", "os", "time", "asyncio"):
-        if not _router_binds(tree.body, required):
+    for required in REQUIRED_IMPORTS:
+        if not _binds(tree.body, required):
             print("ABORT: missing top-level import %r" % ("import " + required)); sys.exit(2)
-    for required in ("_load_gateway_runtime_config", "cfg_get", "logger"):
-        if not _router_binds(tree.body, required):
+    for required in REQUIRED_RUNTIME:
+        if not _binds(tree.body, required):
             print("ABORT: gateway runtime symbol %r is not defined or imported at top level" % required); sys.exit(2)
 
 block_count = src.count(block)

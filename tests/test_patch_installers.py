@@ -1116,8 +1116,8 @@ class PatchInstallerTests(unittest.TestCase):
                     check=False, capture_output=True, text=True,
                     env={**os.environ, "PYTHONPYCACHEPREFIX": str(directory / "pycache")},
                 )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("PATCHED_OK", result.stdout)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("PATCHED_OK", result.stdout)
 
     def test_reverse_removes_a_patch_that_does_not_bind_its_runtime_names(self):
         # The symbol check used to run before reverse. A flush or router
