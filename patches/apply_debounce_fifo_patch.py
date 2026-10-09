@@ -25,7 +25,7 @@ Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
 import ast, sys, py_compile, os, stat, tempfile, argparse
 
-__version__ = "1.0.0-dev"
+__version__ = "1.0.0"
 
 EPILOG = """results (one line on stdout):
   APPLICABLE          --check: the patch can be installed

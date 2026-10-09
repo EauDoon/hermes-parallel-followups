@@ -58,6 +58,16 @@ Hermes gateway or a live model. The exact hashes and local command are below.
 
 `--version` prints which installer generation you hold, and `--help` lists the result tokens and exit codes. Neither touches a target.
 
+To install from a release instead of a checkout, download both scripts and `SHA256SUMS` from the [v1.0.0 release](https://github.com/EauDoon/hermes-parallel-followups/releases/tag/v1.0.0) into one directory and verify them before use:
+
+```bash
+gh release download v1.0.0 --repo EauDoon/hermes-parallel-followups
+sha256sum -c SHA256SUMS
+python3 apply_debounce_fifo_patch.py --version
+```
+
+The commands below use the `patches/` paths of a checkout; run downloaded scripts from their own directory instead.
+
 Inspect the exact target before creating a backup:
 
 ```bash
