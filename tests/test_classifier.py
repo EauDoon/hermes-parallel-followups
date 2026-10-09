@@ -100,6 +100,19 @@ MUST_BG = [
     "what happens to the body if you ran a marathon untrained",
     "what happens if you used bleach on colored clothes",
     "what if you made a mistake on a tax return last year",
+    # A definite artifact noun followed by a preposition ("the output of",
+    # "the chart of accounts") names a general thing, not the conversation's
+    # artifact. "your opinion" and "your recommendation" ask for a new answer.
+    "what is the output of a typical home solar panel in winter",
+    "what is the summary of the causes of the french revolution",
+    "what is the spec for usb power delivery charging",
+    "what is the chart of accounts used for in bookkeeping",
+    "how do I read the logs of a crashed docker container",
+    "how do I stop my email from going to spam folders",
+    "what is the table of contents usually placed before",
+    "what is your opinion on remote work for early startups",
+    "what is your recommendation for a beginner camera under 500 dollars",
+    "what is the periodic table of elements used for",
 ]
 
 MUST_Q = [
@@ -194,6 +207,19 @@ MUST_Q = [
     "what were the results you found for the regression",
     "how many rows are in the dataset you loaded",
     "what is the source for the figure you quoted",
+    # The assistant's own output ("your answer", "your figures") and an
+    # artifact that only the conversation identifies ("the script", "the
+    # table") cannot be resolved by a cold agent.
+    "is your answer correct about the tax filing deadline",
+    "where did your figures for the population come from",
+    "is your summary accurate about the quarterly revenue",
+    "what assumptions went into your calculation of the payback",
+    "what does the script print when the input is empty",
+    "why does the email sound so formal to the reader",
+    "what does the table show for the third quarter",
+    "is the summary accurate about the revenue numbers",
+    "what does the diff change in the parser module",
+    "is the chart correct for the monthly revenue figures",
 ]
 
 fails = []

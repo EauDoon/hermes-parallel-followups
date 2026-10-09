@@ -276,6 +276,11 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\b(?:did|have|had)\\s+I\\s+(?:say|mention|ask|tell|send|share|give|write|upload|attach|paste|decide|choose|pick|agree|mean)\\b"
                 r"|\\bI\\s+(?:said|mentioned|asked|told|wrote|meant|pasted)\\b"
                 r"|\\bthe\\s+\\w+(?:\\s+(?!if\\b|when\\b|whenever\\b|once\\b|after\\b|before\\b|because\\b|unless\\b|until\\b|and\\b|or\\b)\\w+)?\\s+you\\s+(?:showed|shown|quoted|cited|found|loaded|ran|used|made|created|built|listed|produced|generated|computed|calculated|estimated|provided|described|explained|proposed|drafted|shared|sent|linked|picked|chose|gave|wrote|mentioned|suggested|recommended)\\b"
+                # "your answer" and "your figures" name the assistant's own earlier
+                # output. A definite artifact noun followed by a preposition ("the
+                # output of", "the spec for") is usually a general question.
+                r"|\\byour\\s+(?:answer|reply|response|summary|output|table|chart|figures?|numbers|list|calculation|math|draft|script)\\b"
+                r"|\\b(?:the|my|our)\\s+(?:script|spreadsheet|attachment|screenshot|diff|dataset|email|table|chart|summary|output|logs?|proposal|spec)\\b(?!\\s+(?:of|for|from|in|on|to|at|with|between|about)\\b)"
                 r"|\\b(above|earlier|previous|previously)\\b"
                 r"|\\bthe\\s+(?:former|latter)\\b"
                 # "the last answer" was queued. "the first answer" and "the
