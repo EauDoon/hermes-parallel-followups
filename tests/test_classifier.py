@@ -80,6 +80,39 @@ MUST_BG = [
     # A newline is ordinary text. Backspace and DEL are not, and are covered
     # with the queued cases below.
     "what is the population of Ulaanbaatar today\nand why does the census matter for planning",
+    # "did I say" asks about the turn in flight. Present "do I" plus a verb is
+    # a how-to question about the world and stays routable, as do "should I"
+    # and "what should I say to" a third party.
+    "how do I make sourdough bread rise more in winter",
+    "how should I invest for retirement in my thirties",
+    "can you explain how a heat pump works in winter",
+    "what language should I learn first for data science",
+    "how do I choose a laptop for programming on a budget",
+    "how do I pick a ripe watermelon at the grocery store",
+    "how do I decide between two job offers in different cities",
+    "how do I write a cover letter for a data analyst role",
+    "how do I attach a file to an email on an iphone",
+    "how do I send a large video file to a friend",
+    "how do I recall an email I sent by mistake in outlook",
+    "what should I say to a landlord about a late rent payment",
+    # "the X you produced" is a back-reference. An impersonal "if you ran" or
+    # "if you used" is a hypothetical about anyone, not about this assistant.
+    "what happens to the body if you ran a marathon untrained",
+    "what happens if you used bleach on colored clothes",
+    "what if you made a mistake on a tax return last year",
+    # A definite artifact noun followed by a preposition ("the output of",
+    # "the chart of accounts") names a general thing, not the conversation's
+    # artifact. "your opinion" and "your recommendation" ask for a new answer.
+    "what is the output of a typical home solar panel in winter",
+    "what is the summary of the causes of the french revolution",
+    "what is the spec for usb power delivery charging",
+    "what is the chart of accounts used for in bookkeeping",
+    "how do I read the logs of a crashed docker container",
+    "how do I stop my email from going to spam folders",
+    "what is the table of contents usually placed before",
+    "what is your opinion on remote work for early startups",
+    "what is your recommendation for a beginner camera under 500 dollars",
+    "what is the periodic table of elements used for",
 ]
 
 MUST_Q = [
@@ -123,7 +156,8 @@ MUST_Q = [
     "how does the for\x08mer compare with geothermal power",
     # A combining grapheme joiner is not a format character or a control,
     # but it still splits "former" so the phrase match never sees it.
-    # NFD "São" recomposes under NFKC and stays in the background cases.
+    # The NFD "Sa" + U+0303 + "o" background case recomposes to "São" under
+    # NFKC, so it is not queued for carrying a mark.
     "how does the for\u034fmer compare with geothermal power today",
     "what is the population of Oslo and al\x08so Bergen today",
     "What are the implications of the conclusion?\n> earlier response",
@@ -164,6 +198,29 @@ MUST_Q = [
     "why did you recommend the smaller model for the summary task",
     "what did you decide about the timeout configuration",
     "what did you say about monetary policy in the seventies",
+    # The user's own earlier words and the assistant's earlier output are
+    # only in the conversation. "did I", "I said" and "the figure you quoted"
+    # were all answered cold.
+    "what did I say about the deadline for the launch",
+    "did I mention the budget limit for the offsite",
+    "what did I ask you to change in the proposal",
+    "how accurate is the estimate you produced for revenue",
+    "what were the results you found for the regression",
+    "how many rows are in the dataset you loaded",
+    "what is the source for the figure you quoted",
+    # The assistant's own output ("your answer", "your figures") and an
+    # artifact that only the conversation identifies ("the script", "the
+    # table") cannot be resolved by a cold agent.
+    "is your answer correct about the tax filing deadline",
+    "where did your figures for the population come from",
+    "is your summary accurate about the quarterly revenue",
+    "what assumptions went into your calculation of the payback",
+    "what does the script print when the input is empty",
+    "why does the email sound so formal to the reader",
+    "what does the table show for the third quarter",
+    "is the summary accurate about the revenue numbers",
+    "what does the diff change in the parser module",
+    "is the chart correct for the monthly revenue figures",
 ]
 
 fails = []

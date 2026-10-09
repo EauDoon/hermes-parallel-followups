@@ -376,8 +376,12 @@ class DebounceFlushTests(unittest.TestCase):
         occupant = Event("first", MessageType.TEXT)
         adapter._pending_messages["session"] = occupant
         burst = Event("second question about the capital", MessageType.TEXT)
-        delivered = flush_of(adapter)({"session": type("State", (), {"event": burst})()}, "session")
+        # The failed re-read is logged with its traceback. Capture it, so the
+        # warning is asserted instead of printed into the suite output.
+        with self.assertLogs("debounce-flush-test", "WARNING") as logs:
+            delivered = flush_of(adapter)({"session": type("State", (), {"event": burst})()}, "session")
 
+        self.assertTrue(any("not merging it again" in line for line in logs.output), logs.output)
         self.assertTrue(delivered)
         self.assertEqual(occupant.text, "first")
         self.assertEqual(adapter.merges, 0)

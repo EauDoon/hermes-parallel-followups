@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Route flushed busy-text bursts through the FIFO instead of merging them
-.
+"""Route flushed busy-text bursts through the FIFO instead of merging them.
 
 Problem: with display.busy_input_mode=queue, _flush_text_debounce_now pushed
 each debounced burst into the SINGLE pending slot via
@@ -26,10 +25,32 @@ Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
 import ast, sys, py_compile, os, stat, tempfile, argparse
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py")
+__version__ = "1.0.0"
+
+EPILOG = """results (one line on stdout):
+  APPLICABLE          --check: the patch can be installed
+  UPGRADE_APPLICABLE  --check: an older injected generation can be upgraded
+  ALREADY_PATCHED     the current patch is already installed; nothing changed
+  REVERSIBLE          --check --reverse: the current patch can be removed
+  ALREADY_UNPATCHED   --reverse: no patch is installed; nothing changed
+  PATCHED_OK          the patch was installed or upgraded
+  REVERSED_OK         the patch was removed
+  ABORT: <reason>     refused; the target is unchanged
+
+Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
+recovery or target-change failure.
+"""
+
+parser = argparse.ArgumentParser(
+    description=(__doc__ or "").split("\n\n", 1)[0],
+    epilog=EPILOG,
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+)
+parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py",
+                    help="the gateway/platforms/base.py to patch (default: %(default)s)")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
 parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
+parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
 args = parser.parse_args()
 PATH = args.path
 
@@ -475,6 +496,11 @@ line_ending = "\r\n" if "\r\n" in src else "\n"
 # left the debounce store, so the follow-up is dropped instead of falling back
 # to the merge. The router installer refuses the same class of install for the
 # same reason; refuse here too rather than at the first busy follow-up.
+# tests/test_installer_parity.py derives the names NEW loads that OLD does not
+# and requires them to equal this tuple, so a new runtime name cannot slip in.
+REQUIRED_RUNTIME = ("logger", "MessageType")
+
+
 def _target_binds(target, name):
     if isinstance(target, ast.Name):
         return target.id == name
@@ -503,7 +529,9 @@ def _binds(body, name):
             if _binds(node.body, name) or _binds(node.orelse, name):
                 return True
             continue
-        if isinstance(node, ast.Try):
+        # try/except* (3.11+) has the same fields as try/except. getattr keeps
+        # this parseable and correct on 3.10, which has no TryStar.
+        if isinstance(node, (ast.Try, getattr(ast, "TryStar", ast.Try))):
             parts = [node.body, node.orelse, node.finalbody]
             parts.extend(handler.body for handler in node.handlers)
             if any(_binds(part, name) for part in parts):
@@ -522,8 +550,10 @@ def _binds(body, name):
 
 
 def bound(source, name):
+    # The decoded text keeps a UTF-8 byte order mark, and ast.parse reads it
+    # as a SyntaxError. Strip it as flush_site does, or a BOM skips this check.
     try:
-        tree = ast.parse(source)
+        tree = ast.parse(source.lstrip("\ufeff"))
     except SyntaxError:
         # The later syntax check reports this. Calling it a missing name
         # hides a file that does bind the name and simply does not parse.
@@ -538,7 +568,7 @@ def require_runtime_symbols():
     still be uninstalled. Running this before reverse left the NameError in
     place on a flush an older check had accepted.
     """
-    for required in ("logger", "MessageType"):
+    for required in REQUIRED_RUNTIME:
         if not bound(src, required):
             print("ABORT: base-platform symbol %r is not defined or imported" % required); sys.exit(2)
 

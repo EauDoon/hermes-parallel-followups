@@ -6,17 +6,29 @@ Real objects: MessageEvent, SessionSource, build_session_key,
 BasePlatformAdapter.handle_message, GatewayRunner._handle_active_session_busy_message,
 the overflow router, the debounce, and the FIFO. Stubs only at the I/O edge
 (send, background execution, auth).
-"""
-import sys, asyncio, types
-from types import SimpleNamespace
-sys.path.insert(0, "/opt/hermes")
 
-from gateway.platforms.base import (
-    BasePlatformAdapter, MessageEvent, MessageType, build_session_key,
-)
-from gateway.session import SessionSource
-from gateway.config import Platform
-from gateway.run import GatewayRunner
+Needs a Hermes checkout with both patches applied. The gateway is imported
+from HERMES_ROOT, which defaults to /opt/hermes:
+
+    HERMES_ROOT=/path/to/hermes python3 tests/test_burst_fullpath.py
+"""
+import os, sys, asyncio, types
+from types import SimpleNamespace
+
+HERMES_ROOT = os.environ.get("HERMES_ROOT", "/opt/hermes")
+sys.path.insert(0, HERMES_ROOT)
+
+try:
+    from gateway.platforms.base import (
+        BasePlatformAdapter, MessageEvent, MessageType, build_session_key,
+    )
+    from gateway.session import SessionSource
+    from gateway.config import Platform
+    from gateway.run import GatewayRunner
+except ImportError as error:
+    print("REQUIRES_HERMES: cannot import the gateway from %s (%s); "
+          "set HERMES_ROOT to a patched Hermes checkout" % (HERMES_ROOT, error), file=sys.stderr)
+    sys.exit(2)
 
 SENT = []          # acks delivered to the user
 DISPATCHED = []    # prompts sent to background agents

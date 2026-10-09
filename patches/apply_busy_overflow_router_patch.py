@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Busy-queue overflow router.
+"""Busy-queue overflow router: run a self-contained busy follow-up as its own
+background task instead of merging it into the queued turn.
 
 Problem: with display.busy_input_mode=queue, every TEXT message that arrives
 while the agent is busy is newline-merged into ONE pending event and answered
@@ -21,10 +22,35 @@ Usage: apply_busy_overflow_router_patch.py [/opt/hermes/gateway/run.py]
 """
 import ast, sys, py_compile, os, stat, tempfile, argparse
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py")
+__version__ = "1.0.0"
+
+EPILOG = """results (one line on stdout):
+  APPLICABLE          --check: the patch can be installed
+  UPGRADE_APPLICABLE  --check: an older injected generation can be upgraded
+  ALREADY_PATCHED     the current patch is already installed; nothing changed
+  REVERSIBLE          --check --reverse: the current patch can be removed
+  ALREADY_UNPATCHED   --reverse: no patch is installed; nothing changed
+  PATCHED_OK          the patch was installed or upgraded
+  REVERSED_OK         the patch was removed
+  ABORT: <reason>     refused; the target is unchanged
+
+Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
+recovery or target-change failure.
+
+The router is off until display.busy_overflow_background is set to
+independent or all in the gateway config. See the README for the limits.
+"""
+
+parser = argparse.ArgumentParser(
+    description=(__doc__ or "").split("\n\n", 1)[0],
+    epilog=EPILOG,
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+)
+parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py",
+                    help="the gateway/run.py to patch (default: %(default)s)")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
 parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
+parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
 args = parser.parse_args()
 PATH = args.path
 
@@ -269,6 +295,18 @@ BLOCK = '''    # ---------------------------------------------------------------
                 # country is not read as the pronoun.
                 r"|\\b(?:what|how|why|which|where|when|who)\\b(?:\\s+(?!we\\b|us\\b|our\\b|my\\b)\\w+){0,4}\\s+(?:did|do|does|are|is|was|were|should|would|could|have|has|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|hasn't|hasnt|isn't|isnt|aren't|arent|wasn't|wasnt|weren't|werent|shouldn't|shouldnt|wouldn't|wouldnt|couldn't|couldnt|can't|cant|won't|wont)\\s+(?:we|our|my)\\b"
                 r"|\\b(?:should|would|could|can|do|does|did|are|is|was|were|have|has|will|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|isn't|isnt|aren't|arent|can't|cant|won't|wont)\\s+(?:we|our|my)\\b"
+                # A cold agent cannot see what the user said earlier, or what the
+                # assistant produced. "did I"/"have I" plus a verb, "I said", and
+                # "the X you produced" all point back into the turn in flight.
+                # Present "do I choose" is a how-to question and stays routable.
+                r"|\\b(?:did|have|had)\\s+I\\s+(?:say|mention|ask|tell|send|share|give|write|upload|attach|paste|decide|choose|pick|agree|mean)\\b"
+                r"|\\bI\\s+(?:said|mentioned|asked|told|wrote|meant|pasted)\\b"
+                r"|\\bthe\\s+\\w+(?:\\s+(?!if\\b|when\\b|whenever\\b|once\\b|after\\b|before\\b|because\\b|unless\\b|until\\b|and\\b|or\\b)\\w+)?\\s+you\\s+(?:showed|shown|quoted|cited|found|loaded|ran|used|made|created|built|listed|produced|generated|computed|calculated|estimated|provided|described|explained|proposed|drafted|shared|sent|linked|picked|chose|gave|wrote|mentioned|suggested|recommended)\\b"
+                # "your answer" and "your figures" name the assistant's own earlier
+                # output. A definite artifact noun followed by a preposition ("the
+                # output of", "the spec for") is usually a general question.
+                r"|\\byour\\s+(?:answer|reply|response|summary|output|table|chart|figures?|numbers|list|calculation|math|draft|script)\\b"
+                r"|\\b(?:the|my|our)\\s+(?:script|spreadsheet|attachment|screenshot|diff|dataset|email|table|chart|summary|output|logs?|proposal|spec)\\b(?!\\s+(?:of|for|from|in|on|to|at|with|between|about)\\b)"
                 r"|\\b(above|earlier|previous|previously)\\b"
                 r"|\\bthe\\s+(?:former|latter)\\b"
                 # "the last answer" was queued. "the first answer" and "the
@@ -367,9 +405,25 @@ BLOCK = '''    # ---------------------------------------------------------------
             raw = cfg_get(_load_gateway_runtime_config(), "display", key, default=default)
         except Exception:
             return 0
-        if isinstance(raw, bool) or not isinstance(raw, int):
-            return 0
-        return raw if 0 <= raw <= maximum else 0
+        if not isinstance(raw, bool) and isinstance(raw, int) and 0 <= raw <= maximum:
+            return raw
+        # An invalid value used to disable dispatch with no trace, so an
+        # operator could not tell why nothing ran in parallel. Warn once per
+        # key and value. The warning is advice only: nothing in it may change
+        # the fail-closed result.
+        try:
+            marker = (key, repr(raw))
+            seen = self.__dict__.setdefault("_ovr_invalid_limits", set())
+            if marker not in seen:
+                seen.add(marker)
+                logger.warning(
+                    "Busy-overflow display.%s=%r is not an integer from 0 "
+                    "to %d; parallel dispatch is disabled",
+                    key, raw, maximum,
+                )
+        except Exception:
+            pass
+        return 0
 
     async def _run_overflow_background(self, adapter, event, text, task_id, anchor):
         """One owned task covers acknowledgment and generation, including cancellation."""
@@ -528,12 +582,20 @@ block_marker = target_text(BLOCK_MARKER)
 block = target_text(BLOCK)
 anchor = target_text(ANCHOR)
 
-def _router_binds(body, name):
+def _target_binds(target, name):
+    if isinstance(target, ast.Name):
+        return target.id == name
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_target_binds(element, name) for element in target.elts)
+    return False
+
+
+def _binds(body, name):
     """True when ``name`` is bound by these module-level statements.
 
-    A docstring, a comment, and an import alias do not bind it. A combined
-    import and a parenthesized import do. Function and class bodies are not
-    module scope.
+    Function and class bodies are not module scope. An annotation with no
+    value, an import alias, and a comment do not bind the name either; a
+    parenthesized import does, because it is still an import.
     """
     for node in body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -541,31 +603,39 @@ def _router_binds(body, name):
                 return True
             continue
         if isinstance(node, (ast.With, ast.AsyncWith)):
-            if _router_binds(node.body, name):
+            if _binds(node.body, name):
                 return True
             continue
         if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While)):
-            if _router_binds(node.body, name) or _router_binds(node.orelse, name):
+            if _binds(node.body, name) or _binds(node.orelse, name):
                 return True
             continue
-        if isinstance(node, ast.Try):
+        # try/except* (3.11+) has the same fields as try/except. getattr keeps
+        # this parseable and correct on 3.10, which has no TryStar.
+        if isinstance(node, (ast.Try, getattr(ast, "TryStar", ast.Try))):
             parts = [node.body, node.orelse, node.finalbody]
             parts.extend(handler.body for handler in node.handlers)
-            if any(_router_binds(part, name) for part in parts):
+            if any(_binds(part, name) for part in parts):
                 return True
             continue
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == name:
-                    return True
-            continue
-        if isinstance(node, ast.AnnAssign) and node.value is not None and isinstance(node.target, ast.Name) and node.target.id == name:
+        if isinstance(node, ast.Assign) and any(_target_binds(target, name) for target in node.targets):
+            return True
+        if isinstance(node, ast.AnnAssign) and node.value is not None and _target_binds(node.target, name):
             return True
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
-                if (alias.asname or alias.name.split(".")[0]) == name:
+                bound_name = alias.asname or alias.name.split(".")[0]
+                if bound_name == name:
                     return True
     return False
+
+
+# The module-level names BLOCK and HOOK_NEW load at runtime. The injected code
+# never uses os, so a run.py without `import os` is not refused for it.
+# tests/test_installer_parity.py derives this set from the injected source,
+# so a new name there fails the suite until it is listed here.
+REQUIRED_IMPORTS = ("re", "time", "asyncio")
+REQUIRED_RUNTIME = ("_load_gateway_runtime_config", "cfg_get", "logger")
 
 
 def require_router_symbols():
@@ -575,17 +645,19 @@ def require_router_symbols():
     still be uninstalled. A missing cfg_get is otherwise swallowed and the
     router stays off. A docstring or a comment is not a binding, and an
     alias binds the other name. A file that does not parse is reported by
-    the later syntax check rather than as a missing name.
+    the later syntax check rather than as a missing name. The decoded text
+    keeps a UTF-8 byte order mark, which ast.parse reads as a SyntaxError, so
+    it is stripped first or a BOM would skip this check.
     """
     try:
-        tree = ast.parse(src)
+        tree = ast.parse(src.lstrip("\ufeff"))
     except SyntaxError:
         return
-    for required in ("re", "os", "time", "asyncio"):
-        if not _router_binds(tree.body, required):
+    for required in REQUIRED_IMPORTS:
+        if not _binds(tree.body, required):
             print("ABORT: missing top-level import %r" % ("import " + required)); sys.exit(2)
-    for required in ("_load_gateway_runtime_config", "cfg_get", "logger"):
-        if not _router_binds(tree.body, required):
+    for required in REQUIRED_RUNTIME:
+        if not _binds(tree.body, required):
             print("ABORT: gateway runtime symbol %r is not defined or imported at top level" % required); sys.exit(2)
 
 block_count = src.count(block)

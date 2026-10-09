@@ -1,0 +1,2 @@
+# Keep LF in the index and in every working tree, including Windows checkouts.
+* text=auto eol=lf

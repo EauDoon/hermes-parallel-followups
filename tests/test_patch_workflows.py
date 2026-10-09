@@ -20,6 +20,29 @@ def invoke(script, target, *options):
 
 
 class PatchWorkflowTests(unittest.TestCase):
+    def test_version_and_help_touch_nothing_and_state_the_contract(self):
+        # --version must answer before any target handling, so an operator can
+        # ask which generation a script is even with no Hermes present.
+        contract = ("APPLICABLE", "UPGRADE_APPLICABLE", "ALREADY_PATCHED", "REVERSIBLE",
+                    "ALREADY_UNPATCHED", "PATCHED_OK", "REVERSED_OK", "ABORT", "Exit codes")
+        for name, _, _, _ in INSTALLERS:
+            script = ROOT / "patches" / name
+            version = string_constants(script)["__version__"]
+            with self.subTest(installer=name), tempfile.TemporaryDirectory() as td:
+                missing = Path(td) / "absent" / "target.py"
+                for arguments in (("--version",), (str(missing), "--version")):
+                    result = subprocess.run([sys.executable, str(script), *arguments], cwd=td,
+                                            capture_output=True, text=True, check=False)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.strip(), "%s %s" % (name, version))
+                helped = subprocess.run([sys.executable, str(script), "--help"], cwd=td,
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(helped.returncode, 0, helped.stdout + helped.stderr)
+                for token in contract:
+                    self.assertIn(token, helped.stdout)
+                self.assertNotIn("\n.\n", helped.stdout)
+                self.assertEqual(list(Path(td).iterdir()), [])
+
     def test_check_apply_check_has_no_check_side_effects(self):
         for name, old, marker, suffix in INSTALLERS:
             with self.subTest(installer=name), tempfile.TemporaryDirectory() as td:
@@ -45,7 +68,7 @@ class PatchWorkflowTests(unittest.TestCase):
         for name, _, _, _ in INSTALLERS:
             with self.subTest(installer=name), tempfile.TemporaryDirectory() as td:
                 target = Path(td) / "target.py"
-                target.write_text("# unsupported source\n")
+                target.write_text("# unsupported source\n", encoding="utf-8")
                 result = invoke(ROOT / "patches" / name, target, "--check")
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(list(Path(td).iterdir()), [target])
@@ -120,13 +143,13 @@ class PatchWorkflowTests(unittest.TestCase):
                 script = ROOT / "patches" / name
                 target = Path(td) / "target.py"
                 original = unpatched_source(string_constants(script), old, marker)
-                target.write_text(original)
+                target.write_text(original, encoding="utf-8")
                 self.assertEqual(invoke(script, target).returncode, 0)
-                with target.open("a") as file:
+                with target.open("a", encoding="utf-8") as file:
                     file.write("\n# unrelated operator edit\n")
                 result = invoke(script, target, "--reverse")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(target.read_text(), original + "\n# unrelated operator edit\n")
+                self.assertEqual(target.read_text(encoding="utf-8"), original + "\n# unrelated operator edit\n")
 
     def test_concurrent_edit_during_compilation_is_preserved(self):
         compiler = py_compile.compile
@@ -135,11 +158,11 @@ class PatchWorkflowTests(unittest.TestCase):
                 script = ROOT / "patches" / name
                 target = Path(td) / "target.py"
                 original = unpatched_source(string_constants(script), old, marker)
-                target.write_text(original)
+                target.write_text(original, encoding="utf-8")
                 changed = original + "\n# concurrently edited\n"
                 def concurrent_compile(*args, **kwargs):
                     result = compiler(*args, **kwargs)
-                    target.write_text(changed)
+                    target.write_text(changed, encoding="utf-8")
                     return result
                 output = io.StringIO()
                 with patch.object(sys, "argv", [str(script), str(target)]), \
@@ -148,7 +171,7 @@ class PatchWorkflowTests(unittest.TestCase):
                     runpy.run_path(str(script), run_name="__main__")
                 self.assertEqual(raised.exception.code, 3)
                 self.assertIn("target changed", output.getvalue())
-                self.assertEqual(target.read_text(), changed)
+                self.assertEqual(target.read_text(encoding="utf-8"), changed)
                 self.assertFalse(Path(str(target) + suffix).exists())
                 self.assertFalse(list(Path(td).glob(".target.py.*.tmp*")))
 
@@ -163,7 +186,7 @@ class PatchWorkflowTests(unittest.TestCase):
                 script = ROOT / "patches" / name
                 target = Path(td) / "target.py"
                 original = unpatched_source(string_constants(script), old, marker)
-                target.write_text(original)
+                target.write_text(original, encoding="utf-8")
                 changed = original + "\n# concurrently edited\n"
                 calls = {"n": 0}
 
@@ -171,7 +194,7 @@ class PatchWorkflowTests(unittest.TestCase):
                     calls["n"] += 1
                     real_fsync(fd)
                     if calls["n"] == 2:
-                        target.write_text(changed)
+                        target.write_text(changed, encoding="utf-8")
 
                 output = io.StringIO()
                 with patch.object(sys, "argv", [str(script), str(target)]), \
@@ -180,7 +203,7 @@ class PatchWorkflowTests(unittest.TestCase):
                     runpy.run_path(str(script), run_name="__main__")
                 self.assertEqual(raised.exception.code, 3, output.getvalue())
                 self.assertIn("target changed", output.getvalue())
-                self.assertEqual(target.read_text(), changed)
+                self.assertEqual(target.read_text(encoding="utf-8"), changed)
                 self.assertFalse(Path(str(target) + suffix).exists())
                 self.assertFalse(list(Path(td).glob(target.name + ".bak-pre-*")))
                 retry = invoke(script, target, "--check")
