@@ -575,10 +575,12 @@ def require_router_symbols():
     still be uninstalled. A missing cfg_get is otherwise swallowed and the
     router stays off. A docstring or a comment is not a binding, and an
     alias binds the other name. A file that does not parse is reported by
-    the later syntax check rather than as a missing name.
+    the later syntax check rather than as a missing name. The decoded text
+    keeps a UTF-8 byte order mark, which ast.parse reads as a SyntaxError, so
+    it is stripped first or a BOM would skip this check.
     """
     try:
-        tree = ast.parse(src)
+        tree = ast.parse(src.lstrip("\ufeff"))
     except SyntaxError:
         return
     for required in ("re", "os", "time", "asyncio"):

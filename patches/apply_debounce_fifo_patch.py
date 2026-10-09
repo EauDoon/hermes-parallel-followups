@@ -522,8 +522,10 @@ def _binds(body, name):
 
 
 def bound(source, name):
+    # The decoded text keeps a UTF-8 byte order mark, and ast.parse reads it
+    # as a SyntaxError. Strip it as flush_site does, or a BOM skips this check.
     try:
-        tree = ast.parse(source)
+        tree = ast.parse(source.lstrip("\ufeff"))
     except SyntaxError:
         # The later syntax check reports this. Calling it a missing name
         # hides a file that does bind the name and simply does not parse.

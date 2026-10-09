@@ -2,6 +2,7 @@
 """Regression checks for patch-installer idempotency detection."""
 
 import ast
+import codecs
 import contextlib
 import io
 import os
@@ -902,6 +903,40 @@ class PatchInstallerTests(unittest.TestCase):
 
                 self.assertEqual(target.read_bytes(), original)
                 assert_no_staging_residue(self, directory, target)
+
+    def test_bom_target_still_requires_runtime_symbols(self):
+        # Regression: the symbol checks parsed the decoded str, which keeps the
+        # byte order mark, so both hit a SyntaxError and skipped the check. A
+        # BOM target that did not bind a required name was then patched: the
+        # debounce flush raised NameError after the burst left the store, and
+        # the router stayed off without a word.
+        router = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
+        debounce = ROOT / "patches" / "apply_debounce_fifo_patch.py"
+        cases = (
+            (debounce, unpatched_source(
+                string_constants(debounce), "OLD", "_queue_or_replace_pending_event",
+            ).replace("logger = logging.getLogger(__name__)", "log = logging.getLogger(__name__)", 1),
+             "ABORT: base-platform symbol"),
+            (router, unpatched_source(
+                string_constants(router), "HOOK_OLD", "_maybe_route_overflow_to_background",
+            ).replace("from hermes_cli.config import _load_gateway_runtime_config, cfg_get\n", "", 1),
+             "ABORT: gateway runtime symbol"),
+        )
+        for script, incomplete, message in cases:
+            original = codecs.BOM_UTF8 + incomplete.encode("utf-8")
+            compile(original, str(script), "exec")  # still valid Python
+            for options in (("--check",), ()):
+                with self.subTest(script=script.name, options=options), \
+                        tempfile.TemporaryDirectory() as td:
+                    directory = Path(td)
+                    target = directory / "target.py"
+                    target.write_bytes(original)
+                    result = self.run_installer(script, target, directory, *options)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn(message, result.stdout)
+                    self.assertEqual(target.read_bytes(), original)
+                    self.assertFalse(list(directory.glob("target.py.bak-pre-*")))
+                    assert_no_staging_residue(self, directory, target)
 
     def test_debounce_patch_aborts_when_injected_symbols_are_missing(self):
         # Regression: the injected flush body calls `logger` and `MessageType`.
