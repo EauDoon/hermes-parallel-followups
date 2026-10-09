@@ -11,10 +11,13 @@ CHECKS = (
     "test_classifier.py", "test_router.py", "test_router_lifecycle.py",
     "test_patch_installers.py", "test_patch_workflows.py", "test_transcript_scan.py",
     "test_validate_upstream.py", "test_debounce_flush.py", "test_installer_parity.py",
+    "test_installed_hermes_guard.py",
 )
 # Documented in the README as separate from the offline suite because they
-# import an installed Hermes at /opt/hermes. validate_upstream.py is not
-# matched by the test_*.py glob; it needs a pinned upstream fixture.
+# import a patched Hermes from HERMES_ROOT (default /opt/hermes);
+# test_installed_hermes_guard.py checks that they refuse cleanly without one.
+# validate_upstream.py is not matched by the test_*.py glob; it needs a pinned
+# upstream fixture.
 NEEDS_INSTALLED_HERMES = ("test_debounce_fifo.py", "test_burst_fullpath.py")
 # Positional index of the encoding argument, so a positional encoding counts.
 TEXT_HELPERS = {"read_text": 0, "write_text": 1}

@@ -2,15 +2,25 @@
 """Drive the REAL patched _flush_text_debounce_now and assert two successive
 bursts become two separate turns instead of one newline-merged turn.
 
-Run inside the container: python3 /tmp/test_debounce_fifo.py
-"""
-import sys, asyncio, types
-sys.path.insert(0, "/opt/hermes")
+Needs a Hermes checkout with the debounce patch applied. The gateway is
+imported from HERMES_ROOT, which defaults to /opt/hermes:
 
-from gateway.platforms.base import (
-    BasePlatformAdapter, TextDebounceState, MessageType,
-)
-from gateway.run import GatewayRunner
+    HERMES_ROOT=/path/to/hermes python3 tests/test_debounce_fifo.py
+"""
+import os, sys, asyncio, types
+
+HERMES_ROOT = os.environ.get("HERMES_ROOT", "/opt/hermes")
+sys.path.insert(0, HERMES_ROOT)
+
+try:
+    from gateway.platforms.base import (
+        BasePlatformAdapter, TextDebounceState, MessageType,
+    )
+    from gateway.run import GatewayRunner
+except ImportError as error:
+    print("REQUIRES_HERMES: cannot import the gateway from %s (%s); "
+          "set HERMES_ROOT to a patched Hermes checkout" % (HERMES_ROOT, error), file=sys.stderr)
+    sys.exit(2)
 
 FAILS = []
 
