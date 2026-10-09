@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # The workflow actions are pinned to full commit SHAs with the release tag in
+  # a comment. Review each update the same way, and move the pins in
+  # offline.yml and release.yml together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci
