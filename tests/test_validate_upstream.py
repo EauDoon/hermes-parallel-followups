@@ -4,17 +4,18 @@ These refusal paths run without a fixture in the offline suite. A separate
 pinned-source CI job verifies the real revision's happy path; these tests
 remain independent of network availability.
 """
+import contextlib
 import hashlib
 import io
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
+import fetch_pinned_source
 import validate_upstream
 
 
@@ -29,49 +30,74 @@ def validate(source):
 
 class ValidateUpstreamTests(unittest.TestCase):
     def test_pinned_download_retries_only_rate_limits_and_still_verifies_bytes(self):
-        workflow = VALIDATOR.parents[1] / ".github/workflows/offline.yml"
-        code = textwrap.dedent(workflow.read_text(encoding="utf-8").split("python - <<'PY'\n", 1)[1].rsplit("          PY", 1)[0])
-        payloads = {"base.py": b"synthetic base", "run.py": b"synthetic runner"}
+        names = list(validate_upstream.SOURCES)
+        payloads = {name: b"synthetic " + name.encode() for name in names}
         hashes = {name: hashlib.sha256(raw).hexdigest() for name, raw in payloads.items()}
+        urls = {"https://api.github.com/repos/NousResearch/hermes-agent/contents/" + path + "?ref=" + PIN
+                for path in validate_upstream.SOURCES.values()}
         def limited(value=None):
-            return HTTPError("https://raw.githubusercontent.com/", 429, "rate limited", {"Retry-After": value} if value is not None else {}, None)
+            return HTTPError("https://api.github.com/", 429, "rate limited", {"Retry-After": value} if value is not None else {}, None)
         cases = (
-            ("success-after-rate-limit", [limited("7"), io.BytesIO(payloads["base.py"]), io.BytesIO(payloads["run.py"])], [7], None),
+            ("success-after-rate-limit", [limited("7"), *(io.BytesIO(payloads[name]) for name in names)], [7], None),
             ("bounded-rate-limit", [limited("999"), limited(), limited()], [10, 10], HTTPError),
-            ("permanent-http-error", [HTTPError("https://raw.githubusercontent.com/", 404, "not found", {}, None)], [], HTTPError),
+            ("permanent-http-error", [HTTPError("https://api.github.com/", 404, "not found", {}, None)], [], HTTPError),
             ("wrong-hash", [io.BytesIO(b"different source")], [], SystemExit),
+            ("wrong-hash-after-a-good-file", [io.BytesIO(payloads[names[0]]), io.BytesIO(b"different source")], [], SystemExit),
             ("oversize", [io.BytesIO(b"x" * 5_000_001)], [], SystemExit),
         )
         for name, responses, delays, failure in cases:
             expected_hashes = dict(hashes)
             if name == "oversize":
-                expected_hashes["base.py"] = hashlib.sha256(responses[0].getvalue()).hexdigest()
-            with self.subTest(case=name), patch.object(validate_upstream, "HASHES", expected_hashes), \
+                expected_hashes[names[0]] = hashlib.sha256(responses[0].getvalue()).hexdigest()
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td, \
+                    patch.object(validate_upstream, "HASHES", expected_hashes), \
                     patch("urllib.request.urlopen", side_effect=responses) as download, \
-                    patch("time.sleep") as sleep, patch("subprocess.run") as lifecycle:
+                    patch("time.sleep") as sleep, patch("subprocess.run") as lifecycle, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                directory = Path(td) / "fixture"
                 if failure is None:
                     def inspect(arguments, **kwargs):
-                        directory = Path(arguments[-1])
+                        self.assertEqual(Path(arguments[-1]), directory)
                         self.assertEqual({path.name: path.read_bytes() for path in directory.iterdir()}, payloads)
                         self.assertTrue(kwargs["check"])
                         self.assertEqual(kwargs["timeout"], 90)
                     lifecycle.side_effect = inspect
-                    exec(compile(code, str(workflow), "exec"), {})
+                    fetch_pinned_source.main([str(directory), "--validate"])
                     lifecycle.assert_called_once()
                 else:
                     with self.assertRaises(failure):
-                        exec(compile(code, str(workflow), "exec"), {})
+                        fetch_pinned_source.main([str(directory), "--validate"])
                     lifecycle.assert_not_called()
+                    # Every file is verified before any is written.
+                    self.assertFalse(directory.exists())
                 self.assertEqual([call.args[0] for call in sleep.call_args_list], delays)
                 self.assertEqual(download.call_count, len(responses))
                 for call in download.call_args_list:
                     request = call.args[0]
-                    self.assertIn(request.full_url, {
-                        "https://api.github.com/repos/NousResearch/hermes-agent/contents/" + path + "?ref=" + PIN
-                        for path in ("gateway/platforms/base.py", "gateway/run.py")})
+                    self.assertIn(request.full_url, urls)
                     self.assertEqual(request.get_header("Accept"), "application/vnd.github.raw+json")
                     self.assertIsNone(request.get_header("Authorization"))
                     self.assertEqual(call.kwargs["timeout"], 20)
+
+    def test_fetch_without_validate_writes_the_verified_files_only(self):
+        payloads = {name: b"synthetic " + name.encode() for name in validate_upstream.SOURCES}
+        hashes = {name: hashlib.sha256(raw).hexdigest() for name, raw in payloads.items()}
+        with tempfile.TemporaryDirectory() as td, \
+                patch.object(validate_upstream, "HASHES", hashes), \
+                patch("urllib.request.urlopen", side_effect=[io.BytesIO(raw) for raw in payloads.values()]), \
+                patch("subprocess.run") as lifecycle, contextlib.redirect_stdout(io.StringIO()) as output:
+            directory = Path(td) / "fixture"
+            fetch_pinned_source.main([str(directory)])
+            self.assertEqual({path.name: path.read_bytes() for path in directory.iterdir()}, payloads)
+        lifecycle.assert_not_called()
+        self.assertEqual(output.getvalue().strip(), "PINNED_SOURCE_OK " + PIN)
+
+    def test_ci_runs_the_shared_download_script(self):
+        # The download used to live in a YAML heredoc that only CI could run
+        # and these tests could reach only by string-splitting the workflow.
+        workflow = (VALIDATOR.parents[1] / ".github" / "workflows" / "offline.yml").read_text(encoding="utf-8")
+        self.assertIn('python tests/fetch_pinned_source.py "$RUNNER_TEMP/upstream-fixture" --validate', workflow)
+        self.assertNotIn("<<", workflow)
 
     def test_wrong_fixture_layout_is_refused_with_the_revision_named(self):
         with tempfile.TemporaryDirectory() as td:

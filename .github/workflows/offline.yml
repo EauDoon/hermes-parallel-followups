@@ -54,38 +54,6 @@ jobs:
           python-version: '3.12'
       - name: Verify pinned public source before lifecycle checks
         shell: bash
-        run: |
-          python - <<'PY'
-          import hashlib
-          from pathlib import Path
-          import subprocess
-          import sys
-          import tempfile
-          import time
-          import urllib.error
-          import urllib.request
-          sys.path.insert(0, "tests")
-          from validate_upstream import HASHES, PIN
-          paths = {"base.py": "gateway/platforms/base.py", "run.py": "gateway/run.py"}
-          with tempfile.TemporaryDirectory() as directory:
-              for name, source in paths.items():
-                  url = f"https://api.github.com/repos/NousResearch/hermes-agent/contents/{source}?ref={PIN}"
-                  request = urllib.request.Request(url, headers={"Accept": "application/vnd.github.raw+json"})
-                  for attempt in range(3):
-                      try:
-                          with urllib.request.urlopen(request, timeout=20) as response:
-                              raw = response.read(5_000_001)
-                          break
-                      except urllib.error.HTTPError as error:
-                          if error.code != 429 or attempt == 2:
-                              raise
-                          try:
-                              delay = int((error.headers or {}).get("Retry-After", ""))
-                          except ValueError:
-                              delay = 5 * (attempt + 1)
-                          time.sleep(min(10, max(1, delay)))
-                  if len(raw) > 5_000_000 or hashlib.sha256(raw).hexdigest() != HASHES[name]:
-                      raise SystemExit(f"Pinned source hash mismatch: {name}")
-                  (Path(directory) / name).write_bytes(raw)
-              subprocess.run([sys.executable, "tests/validate_upstream.py", directory], check=True, timeout=90)
-          PY
+        # tests/fetch_pinned_source.py verifies every hash before it writes
+        # or runs anything. No token: this job executes the verified code.
+        run: python tests/fetch_pinned_source.py "$RUNNER_TEMP/upstream-fixture" --validate

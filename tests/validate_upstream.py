@@ -24,6 +24,11 @@ HASHES = {
     "base.py": "6bfdf20de31ae01fbd088457b91252d2430f9bc45d0a84ba132590be54fc909f",
     "run.py": "36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3767dddbda89",
 }
+# Where each fixture file lives in the upstream repository at PIN.
+SOURCES = {
+    "base.py": "gateway/platforms/base.py",
+    "run.py": "gateway/run.py",
+}
 ROOT = Path(__file__).resolve().parents[1]
 
 

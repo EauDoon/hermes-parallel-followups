@@ -97,13 +97,16 @@ gateway/run.py             36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3
 
 `tests/validate_upstream.py` checks apply, check, reverse, and reapply, then exercises selected real FIFO and debounce methods with synthetic events. It never downloads source, imports an installed gateway, or edits the supplied fixture.
 
-A separate `pinned-source` CI job downloads only these two files from that exact public revision, verifies both hashes before executing any extracted upstream code, and runs this validator on disposable copies. It does not fetch mutable main or use deployed source.
+A separate `pinned-source` CI job runs `tests/fetch_pinned_source.py`. It downloads only these files from that exact public revision without credentials, verifies every hash before it writes or executes anything, and then runs this validator on disposable copies. It does not fetch mutable main or use deployed source.
 
-Supply a directory containing the pinned `base.py` and `run.py` directly (without the `gateway/` subdirectories), then run:
+To reproduce the job locally, fetch and verify the fixture, then validate it:
 
 ```bash
+python3 tests/fetch_pinned_source.py ./upstream-fixture
 python3 tests/validate_upstream.py ./upstream-fixture
 ```
+
+`python3 tests/fetch_pinned_source.py ./upstream-fixture --validate` does both in one step, as CI does. To use files obtained another way, supply a directory containing the pinned `base.py` and `run.py` directly (without the `gateway/` subdirectories). The validator refuses any file whose hash differs.
 
 Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResearch/hermes-agent/commit/ed2d821021e073425994544dca292d36a12cf4a3), checked on 09-09-2026, has a different runner structure. The router installer refuses it because the required hook is absent. Compatibility with that revision and newer releases is unsupported. Do not bypass an anchor failure.
 
