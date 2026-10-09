@@ -108,6 +108,17 @@ def debounce_injected_names(constants):
             - free_names(ast.parse("def _f():\n" + constants["OLD"])))
 
 
+def option_strings(tree):
+    """Every argument name the installer's parser registers."""
+    options = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"):
+            options.update(argument.value for argument in node.args
+                           if isinstance(argument, ast.Constant) and isinstance(argument.value, str))
+    return options
+
+
 def run_installer(script, target, directory):
     return subprocess.run(
         [sys.executable, str(script), str(target)],
@@ -125,6 +136,12 @@ class InstallerParityTests(unittest.TestCase):
                 self.assertIn(name, debounce)
                 self.assertEqual(ast.dump(router[name]), ast.dump(debounce[name]),
                                  "%s differs between the installers" % name)
+
+    def test_versions_and_command_lines_match(self):
+        # The two scripts ship together and are released under one version.
+        self.assertEqual(string_constants(ROUTER)["__version__"], string_constants(DEBOUNCE)["__version__"])
+        self.assertEqual(option_strings(module(ROUTER)), option_strings(module(DEBOUNCE)))
+        self.assertEqual(option_strings(module(ROUTER)), {"path", "--check", "--reverse", "--version"})
 
     def test_staging_and_replacement_tails_are_identical(self):
         self.assertEqual(staging_tail(module(ROUTER)), staging_tail(module(DEBOUNCE)))

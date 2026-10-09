@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Route flushed busy-text bursts through the FIFO instead of merging them
-.
+"""Route flushed busy-text bursts through the FIFO instead of merging them.
 
 Problem: with display.busy_input_mode=queue, _flush_text_debounce_now pushed
 each debounced burst into the SINGLE pending slot via
@@ -26,10 +25,32 @@ Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
 import ast, sys, py_compile, os, stat, tempfile, argparse
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py")
+__version__ = "1.0.0-dev"
+
+EPILOG = """results (one line on stdout):
+  APPLICABLE          --check: the patch can be installed
+  UPGRADE_APPLICABLE  --check: an older injected generation can be upgraded
+  ALREADY_PATCHED     the current patch is already installed; nothing changed
+  REVERSIBLE          --check --reverse: the current patch can be removed
+  ALREADY_UNPATCHED   --reverse: no patch is installed; nothing changed
+  PATCHED_OK          the patch was installed or upgraded
+  REVERSED_OK         the patch was removed
+  ABORT: <reason>     refused; the target is unchanged
+
+Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
+recovery or target-change failure.
+"""
+
+parser = argparse.ArgumentParser(
+    description=(__doc__ or "").split("\n\n", 1)[0],
+    epilog=EPILOG,
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+)
+parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/base.py",
+                    help="the gateway/platforms/base.py to patch (default: %(default)s)")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
 parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
+parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
 args = parser.parse_args()
 PATH = args.path
 

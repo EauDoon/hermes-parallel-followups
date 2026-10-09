@@ -20,6 +20,29 @@ def invoke(script, target, *options):
 
 
 class PatchWorkflowTests(unittest.TestCase):
+    def test_version_and_help_touch_nothing_and_state_the_contract(self):
+        # --version must answer before any target handling, so an operator can
+        # ask which generation a script is even with no Hermes present.
+        contract = ("APPLICABLE", "UPGRADE_APPLICABLE", "ALREADY_PATCHED", "REVERSIBLE",
+                    "ALREADY_UNPATCHED", "PATCHED_OK", "REVERSED_OK", "ABORT", "Exit codes")
+        for name, _, _, _ in INSTALLERS:
+            script = ROOT / "patches" / name
+            version = string_constants(script)["__version__"]
+            with self.subTest(installer=name), tempfile.TemporaryDirectory() as td:
+                missing = Path(td) / "absent" / "target.py"
+                for arguments in (("--version",), (str(missing), "--version")):
+                    result = subprocess.run([sys.executable, str(script), *arguments], cwd=td,
+                                            capture_output=True, text=True, check=False)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.strip(), "%s %s" % (name, version))
+                helped = subprocess.run([sys.executable, str(script), "--help"], cwd=td,
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(helped.returncode, 0, helped.stdout + helped.stderr)
+                for token in contract:
+                    self.assertIn(token, helped.stdout)
+                self.assertNotIn("\n.\n", helped.stdout)
+                self.assertEqual(list(Path(td).iterdir()), [])
+
     def test_check_apply_check_has_no_check_side_effects(self):
         for name, old, marker, suffix in INSTALLERS:
             with self.subTest(installer=name), tempfile.TemporaryDirectory() as td:

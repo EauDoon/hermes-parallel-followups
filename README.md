@@ -56,6 +56,8 @@ Hermes gateway or a live model. The exact hashes and local command are below.
 
 ## Quick start
 
+`--version` prints which installer generation you hold, and `--help` lists the result tokens and exit codes. Neither touches a target.
+
 Inspect the exact target before creating a backup:
 
 ```bash
