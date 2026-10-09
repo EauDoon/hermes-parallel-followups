@@ -1,0 +1,68 @@
+name: Release
+# Pushing an annotated vX.Y.Z tag on main publishes both installers and their
+# SHA256SUMS as a GitHub Release, with the CHANGELOG section as the notes.
+# verify runs upstream code (the pinned-source gate) with a read-only token.
+# publish holds the write token and runs only this repository's own scripts.
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - name: Tag, VERSION, installers and CHANGELOG agree
+        run: python tests/check_version.py --tag "$GITHUB_REF_NAME"
+      - name: Offline suite
+        run: python tests/run_offline.py
+      - name: Pinned public source
+        run: python tests/fetch_pinned_source.py "$RUNNER_TEMP/upstream-fixture" --validate
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - name: Tag, VERSION, installers and CHANGELOG agree
+        run: python tests/check_version.py --tag "$GITHUB_REF_NAME"
+      - name: Release notes from CHANGELOG
+        run: python tests/check_version.py --notes > "$RUNNER_TEMP/notes.md"
+      - name: Assets and checksums
+        run: |
+          mkdir dist
+          cp patches/apply_debounce_fifo_patch.py patches/apply_busy_overflow_router_patch.py dist/
+          (cd dist && sha256sum apply_*.py > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --title "$GITHUB_REF_NAME"
+          --notes-file "$RUNNER_TEMP/notes.md"
+          dist/apply_debounce_fifo_patch.py
+          dist/apply_busy_overflow_router_patch.py
+          dist/SHA256SUMS

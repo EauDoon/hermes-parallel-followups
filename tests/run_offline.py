@@ -11,7 +11,7 @@ CHECKS = (
     "test_classifier.py", "test_router.py", "test_router_lifecycle.py",
     "test_patch_installers.py", "test_patch_workflows.py", "test_transcript_scan.py",
     "test_validate_upstream.py", "test_debounce_flush.py", "test_installer_parity.py",
-    "test_installed_hermes_guard.py",
+    "test_installed_hermes_guard.py", "test_versioning.py",
 )
 # Documented in the README as separate from the offline suite because they
 # import a patched Hermes from HERMES_ROOT (default /opt/hermes);

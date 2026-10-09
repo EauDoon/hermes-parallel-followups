@@ -123,6 +123,20 @@ python3 tests/run_offline.py
 
 It covers the classifier, router gates, concurrent admission and cancellation, installer failure and lifecycle paths, and read-only transcript scanning. It does not import an installed Hermes. The runner fails if a `tests/test_*.py` file is neither listed in `CHECKS` nor named as needing an installed Hermes, so a new test cannot be added and then silently never run. CI runs once for each pull request update and once for each push to main. Python 3.10, 3.11, 3.12, 3.13, and 3.14 on Linux and Windows are blocking jobs; Python 3.15 runs on both systems as a non-blocking pre-release job until its final release. Dependabot proposes updates to the pinned workflow actions weekly. The real-source checks `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` are separate from the offline suite and need a Hermes checkout with the patches applied. They import it from `HERMES_ROOT`, which defaults to `/opt/hermes`, for example `HERMES_ROOT=/path/to/hermes python3 tests/test_debounce_fifo.py`. Without one they exit 2 with `REQUIRES_HERMES`; the offline suite checks that refusal, never a gateway. For a read-only aggregate split of your own transcript, run `python3 tests/test_classifier.py --db /path/to/state.db`; it prints counts only. See [docs/CASE_STUDY.md](docs/CASE_STUDY.md) for the recorded local result and evidence boundary.
 
+## Versioning and releases
+
+The installers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Their public contract is the command line (`--check`, `--reverse`, `--version`), the result tokens, the exit codes, the recovery copy names, and the `display.busy_overflow_*` config keys with their defaults and ranges.
+
+- MAJOR: a flag, result token, exit code, recovery copy name, or config key changes or goes away, or the supported source pin is dropped.
+- MINOR: a new supported source pin, a new option, or a change to classifier or routing behavior.
+- PATCH: a fix that keeps the contract.
+
+Compatibility with Hermes itself is pinned separately; see the compatibility table above. `VERSION` is the single source of the version. Each installer carries a copy as `__version__` so that it stays one standalone file, and `tests/check_version.py` fails the offline suite when the copies, `VERSION`, and `CHANGELOG.md` disagree. A release is an annotated `vX.Y.Z` tag on main. Pushing it runs `.github/workflows/release.yml`, which checks the tag against `VERSION` and the changelog, reruns the offline suite and the pinned-source gate, and then publishes both installers and a `SHA256SUMS` file as a GitHub Release, with the changelog section as the notes.
+
+To verify downloaded release assets, run `sha256sum -c SHA256SUMS` in the download directory. On Windows, compare the output of `Get-FileHash -Algorithm SHA256 <file>` with the listed value.
+
+A release that changes the router's injected block is an upgrade for every existing router install, and each upgrade uses one of the eight recovery slots described in "Reverse and recover". Classifier changes are therefore batched into releases rather than shipped one at a time.
+
 ## License and provenance
 
 MIT. See [LICENSE](LICENSE).
