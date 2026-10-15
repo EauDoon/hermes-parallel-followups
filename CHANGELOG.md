@@ -4,6 +4,12 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed diagnostic log after an acknowledgment error or timeout no longer
+  drops an already accepted parallel follow-up. The background run still starts
+  exactly once, and acknowledgment cleanup and capacity limits are unchanged.
+
 ## [1.0.0] - 2026-10-09
 
 First tagged release. Earlier work, up to pull request #52, shipped untagged from main. This release declares the installer contract the README documents (flags, result tokens, exit codes, recovery copy names, and the `display.busy_overflow_*` config keys) as the public API. Compatibility with Hermes stays pinned to revision d7b36070.
