@@ -451,14 +451,22 @@ BLOCK = '''    # ---------------------------------------------------------------
             else:
                 acknowledgment.cancel()
                 await asyncio.gather(acknowledgment, return_exceptions=True)
-                logger.debug("Busy-overflow ack timed out")
+                try:
+                    logger.debug("Busy-overflow ack timed out")
+                except Exception:
+                    pass
         except asyncio.CancelledError:
             if acknowledgment is not None:
                 acknowledgment.cancel()
                 await asyncio.gather(acknowledgment, return_exceptions=True)
             raise
         except Exception:
-            logger.debug("Busy-overflow ack send failed", exc_info=True)
+            # Admission already returned True, so the caller will not queue
+            # this event. A broken diagnostic sink must not drop its run.
+            try:
+                logger.debug("Busy-overflow ack send failed", exc_info=True)
+            except Exception:
+                pass
         await self._run_background_task(
             text, event.source, task_id, event_message_id=anchor,
         )

@@ -163,6 +163,34 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.runner.prompts), 1)
         self.assertFalse(self.runner._overflow_router_tasks)
 
+    async def test_ack_diagnostic_failure_cannot_drop_an_accepted_followup(self):
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout):
+                runner = Runner()
+                runner.release.set()
+                runner._OVR_ACK_TIMEOUT_SECONDS = 0.01
+                cleaned_up = asyncio.Event()
+
+                async def failed_ack(**kwargs):
+                    try:
+                        if timeout:
+                            await asyncio.Event().wait()
+                        raise OSError("adapter offline")
+                    finally:
+                        cleaned_up.set()
+
+                runner.adapter._send_with_retry = failed_ack
+                with patch.object(namespace["logger"], "debug", side_effect=OSError("log sink offline")):
+                    accepted = await runner._maybe_route_overflow_to_background(event(), "session")
+                    self.assertTrue(accepted)
+                    owned = list(runner._background_tasks)
+                    results = await asyncio.gather(*owned, return_exceptions=True)
+                self.assertTrue(cleaned_up.is_set())
+                self.assertEqual(results, [None])
+                self.assertEqual([prompt for prompt, _ in runner.prompts], [event().text])
+                self.assertFalse(runner._overflow_router_tasks)
+                self.assertFalse(runner._background_tasks)
+
     async def test_cancel_during_ack_cancels_owned_task_and_releases_capacity(self):
         started = asyncio.Event()
         async def blocked(**kwargs):
