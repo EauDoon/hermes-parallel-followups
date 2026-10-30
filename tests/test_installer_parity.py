@@ -25,7 +25,7 @@ DEBOUNCE = ROOT / "patches" / "apply_debounce_fifo_patch.py"
 SHARED_HELPERS = (
     "checked_read", "guard_target", "parses", "recovery_copy_conflict",
     "write_backup_exclusive", "recovery_slot", "_target_binds", "_binds",
-    "recovery_report", "source_verdict", "print_status",
+    "recovery_report", "source_verdict", "print_status", "show_diff",
 )
 TAIL_TARGETS = ["candidate", "bytecode", "backup_path"]
 
@@ -142,7 +142,7 @@ class InstallerParityTests(unittest.TestCase):
         # The two scripts ship together and are released under one version.
         self.assertEqual(string_constants(ROUTER)["__version__"], string_constants(DEBOUNCE)["__version__"])
         self.assertEqual(option_strings(module(ROUTER)), option_strings(module(DEBOUNCE)))
-        self.assertEqual(option_strings(module(ROUTER)), {"path", "--check", "--reverse", "--version", "--status"})
+        self.assertEqual(option_strings(module(ROUTER)), {"path", "--check", "--reverse", "--version", "--status", "--diff"})
 
     def test_staging_and_replacement_tails_are_identical(self):
         self.assertEqual(staging_tail(module(ROUTER)), staging_tail(module(DEBOUNCE)))

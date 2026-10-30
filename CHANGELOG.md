@@ -6,6 +6,13 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Added
 
+- `--diff` on both installers: runs exactly what `--check` runs, prints the
+  same first line, then the unified diff of the target against the bytes an
+  install, upgrade or (with `--reverse`) uninstall would write. It writes
+  nothing. A refusal prints what `--check` prints, with the same exit code.
+  The diff is UTF-8 with LF line endings, so a CRLF target shows no carriage
+  returns. Before, `--check` gave only a verdict, and a router upgrade could
+  not be reviewed before it replaced the production file.
 - `--status` on both installers: a read-only report that starts with
   `STATUS <state>` (`UNPATCHED`, `CURRENT`, `PREVIOUS`, `EDITED` for the
   router, `MALFORMED` or `UNRECOGNIZED`), then `key: value` lines naming the

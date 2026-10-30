@@ -81,7 +81,13 @@ python3 patches/apply_busy_overflow_router_patch.py /path/to/hermes/gateway/run.
 python3 patches/apply_busy_overflow_router_patch.py /path/to/hermes/gateway/run.py --status
 ```
 
-Its first line is `STATUS <state>`: `UNPATCHED`, `CURRENT`, `PREVIOUS` (an earlier release the installer upgrades or reverses exactly), `EDITED` (a router block that never shipped), `MALFORMED` (a layout every write refuses), or `UNRECOGNIZED` (no patch and not the supported layout). `key: value` lines follow: the installer and its version, the target's sha256, the installed generation, whether the unpatched file the installer would restore is byte for byte the supported pinned revision, how many of the eight slots of each recovery copy kind are used, and one `copy:` line per recovery copy with its sha256 and whether it equals the target. The source line is a content verdict, read with CRLF as LF: `differs from pinned revision d7b36070` on a newer Hermes says the file is not the supported revision, not that the patch would fail, and `unknown` means the unpatched file cannot be reconstructed. The target guards still apply: a missing, non-regular, non-UTF-8, or mixed line-ending target gets the same `ABORT` line and exit code 2, and a `base.py` that does not parse gets exit code 3. `--status` cannot be combined with `--check` or `--reverse`.
+Its first line is `STATUS <state>`: `UNPATCHED`, `CURRENT`, `PREVIOUS` (an earlier release the installer upgrades or reverses exactly), `EDITED` (a router block that never shipped), `MALFORMED` (a layout every write refuses), or `UNRECOGNIZED` (no patch and not the supported layout). `key: value` lines follow: the installer and its version, the target's sha256, the installed generation, whether the unpatched file the installer would restore is byte for byte the supported pinned revision, how many of the eight slots of each recovery copy kind are used, and one `copy:` line per recovery copy with its sha256 and whether it equals the target. The source line is a content verdict, read with CRLF as LF: `differs from pinned revision d7b36070` on a newer Hermes says the file is not the supported revision, not that the patch would fail, and `unknown` means the unpatched file cannot be reconstructed. The target guards still apply: a missing, non-regular, non-UTF-8, or mixed line-ending target gets the same `ABORT` line and exit code 2, and a `base.py` that does not parse gets exit code 3. `--status` cannot be combined with `--check`, `--reverse`, or `--diff`.
+
+`--diff` previews the exact edit before anything is written. It runs the same checks as `--check` and prints the same first line, then a unified diff (three lines of context, `a/` and `b/` labels with the target's file name) of the target against the bytes the write would produce. It works for an install, an upgrade, and, with `--reverse`, an uninstall. The diff is written as UTF-8 with LF line endings, and a CRLF target is compared line by line, so it shows no carriage returns. `ALREADY_PATCHED` and `ALREADY_UNPATCHED` print only the token, and a refusal prints exactly what `--check` prints, with the same exit code. Like `--check`, it creates no backup, bytecode, or temporary file:
+
+```bash
+python3 patches/apply_busy_overflow_router_patch.py /path/to/hermes/gateway/run.py --diff
+```
 
 Stop the gateway and other source writers, then apply one or both patches:
 
@@ -143,7 +149,7 @@ It covers the classifier, router gates, concurrent admission and cancellation, i
 
 ## Versioning and releases
 
-The installers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Their public contract is the command line (`--check`, `--reverse`, `--status`, `--version`), the result tokens (including the `STATUS` line and its states), the exit codes, the recovery copy names (each with its numbered `.2` to `.8` slots), and the `display.busy_overflow_*` config keys with their defaults and ranges.
+The installers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Their public contract is the command line (`--check`, `--reverse`, `--diff`, `--status`, `--version`), the result tokens (including the `STATUS` line and its states), the exit codes, the recovery copy names (each with its numbered `.2` to `.8` slots), and the `display.busy_overflow_*` config keys with their defaults and ranges.
 
 - MAJOR: a flag, result token, exit code, recovery copy name, or config key changes or goes away, or the supported source pin is dropped.
 - MINOR: a new supported source pin, a new option, or a change to classifier or routing behavior.

@@ -20,7 +20,7 @@ Gated by display.busy_overflow_background:
 Idempotent, backed up, syntax-checked.
 Usage: apply_busy_overflow_router_patch.py [/opt/hermes/gateway/run.py]
 """
-import ast, sys, py_compile, os, stat, tempfile, argparse, hashlib
+import ast, sys, py_compile, os, stat, tempfile, argparse, hashlib, difflib
 
 __version__ = "1.0.0"
 
@@ -32,7 +32,8 @@ PINNED_REVISION = "d7b36070ef807841699ad32c5b6af547fee3ff64"
 PINNED_SHA256 = "36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3767dddbda89"
 
 EPILOG = """results (the first line on stdout starts with one of these; an ABORT may
-add a detail line, and --status prints key: value lines after its STATUS line):
+add a detail line, --diff prints the unified diff after a successful --check
+token, and --status prints key: value lines after its STATUS line):
   APPLICABLE          --check: the patch can be installed
   UPGRADE_APPLICABLE  --check: an older injected generation can be upgraded
   ALREADY_PATCHED     the current patch is already installed; nothing changed
@@ -69,14 +70,18 @@ parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py",
                     help="the gateway/run.py to patch (default: %(default)s)")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
 parser.add_argument("--reverse", action="store_true", help="remove the current patch, or a router block from an earlier release, while preserving unrelated edits")
+parser.add_argument("--diff", action="store_true",
+                    help="like --check, then print the unified diff of the exact edit the write would make")
 parser.add_argument("--status", action="store_true",
                     help="report the installed generation, the pinned-source match and the recovery copies; writes nothing")
 parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
 args = parser.parse_args()
 # Validated by hand: a mutually exclusive group holding --check and --reverse
 # would also reject the existing --check --reverse.
-if args.status and (args.check or args.reverse):
-    parser.error("--status cannot be combined with --check or --reverse")
+if args.status and (args.check or args.reverse or args.diff):
+    parser.error("--status cannot be combined with --check, --reverse or --diff")
+if args.diff:
+    args.check = True
 PATH = args.path
 
 
@@ -244,6 +249,25 @@ def print_status(state, generation, unpatched, backup):
     for line in recovery_report(backup, target_bytes):
         print(line)
 
+
+def show_diff(after):
+    """Print the unified diff from the target to ``after`` for --diff.
+
+    Lines are split on the target's own line ending and written as UTF-8 with
+    LF, so a CRLF target shows no carriage returns and a console code page
+    cannot reject a character in the source.
+    """
+    name = os.path.basename(PATH)
+    lines = difflib.unified_diff(src.split(line_ending), after.split(line_ending),
+                                 "a/" + name, "b/" + name, n=3, lineterm="")
+    text = "\n".join(lines) + "\n"
+    sys.stdout.flush()
+    stream = getattr(sys.stdout, "buffer", None)
+    if stream is None:
+        sys.stdout.write(text)
+    else:
+        stream.write(text.encode("utf-8"))
+        stream.flush()
 
 try:
     st = os.lstat(PATH)
@@ -1069,7 +1093,10 @@ if args.check:
     parent = os.path.dirname(os.path.abspath(PATH)) or "."
     if not os.access(parent, os.W_OK | os.X_OK):
         print("ABORT: target directory is not writable; the install cannot create its temporary file:\n", parent); sys.exit(3)
-    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
+    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE")
+    if args.diff:
+        show_diff(out)
+    sys.exit(0)
 
 candidate = bytecode = backup_path = None
 created_backup = False

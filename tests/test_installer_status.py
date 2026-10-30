@@ -218,7 +218,7 @@ class StatusTests(unittest.TestCase):
             directory = self.fresh()
             target = directory / "target.py"
             target.write_bytes(unpatched(script).encode("utf-8"))
-            for extra in (("--check",), ("--reverse",)):
+            for extra in (("--check",), ("--reverse",), ("--diff",)):
                 with self.subTest(script=script.name, extra=extra):
                     result = run(script, target, "--status", *extra)
                     self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
