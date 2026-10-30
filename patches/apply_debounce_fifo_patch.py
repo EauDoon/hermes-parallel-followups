@@ -23,11 +23,19 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import ast, sys, py_compile, os, stat, tempfile, argparse
+import ast, sys, py_compile, os, stat, tempfile, argparse, hashlib
 
 __version__ = "1.0.0"
 
-EPILOG = """results (one line on stdout):
+# The one upstream revision these patches are verified against, and the
+# sha256 of its gateway/platforms/base.py. --status compares the reconstructed
+# unpatched file with it. tests/test_installer_status.py keeps both equal
+# to tests/validate_upstream.py.
+PINNED_REVISION = "d7b36070ef807841699ad32c5b6af547fee3ff64"
+PINNED_SHA256 = "6bfdf20de31ae01fbd088457b91252d2430f9bc45d0a84ba132590be54fc909f"
+
+EPILOG = """results (the first line on stdout starts with one of these; an ABORT may
+add a detail line, and --status prints key: value lines after its STATUS line):
   APPLICABLE          --check: the patch can be installed
   UPGRADE_APPLICABLE  --check: an older injected generation can be upgraded
   ALREADY_PATCHED     the current patch is already installed; nothing changed
@@ -36,6 +44,8 @@ EPILOG = """results (one line on stdout):
   PATCHED_OK          the patch was installed or upgraded
   REVERSED_OK         the patch was removed
   ABORT: <reason>     refused; the target is unchanged
+  STATUS <state>      --status: UNPATCHED, CURRENT, PREVIOUS, MALFORMED
+                      or UNRECOGNIZED
 
 Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
 recovery or target-change failure.
@@ -58,8 +68,14 @@ parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/ba
                     help="the gateway/platforms/base.py to patch (default: %(default)s)")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
 parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
+parser.add_argument("--status", action="store_true",
+                    help="report the installed generation, the pinned-source match and the recovery copies; writes nothing")
 parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
 args = parser.parse_args()
+# Validated by hand: a mutually exclusive group holding --check and --reverse
+# would also reject the existing --check --reverse.
+if args.status and (args.check or args.reverse):
+    parser.error("--status cannot be combined with --check or --reverse")
 PATH = args.path
 
 
@@ -175,6 +191,58 @@ def recovery_slot(base, contents):
         "no free recovery slot beside %s; preserve or relocate them "
         "before retrying" % base
     )
+
+
+def recovery_report(base, target_bytes):
+    """Slot usage and one line per recovery copy beside the target, for --status."""
+    counts, copies = [], []
+    for family, label in (("", "backup_slots"), (".upgrade", "upgrade_slots"), (".reverse", "reverse_slots")):
+        used = 0
+        for ordinal in range(1, 9):
+            name = base + family + ("" if ordinal == 1 else ".%d" % ordinal)
+            try:
+                info = os.lstat(name)
+            except FileNotFoundError:
+                continue
+            used += 1
+            shown = os.path.basename(name)
+            if not stat.S_ISREG(info.st_mode):
+                copies.append("copy: %s not-regular" % shown)
+                continue
+            try:
+                contents = checked_read(name)
+            except OSError:
+                copies.append("copy: %s regular unreadable" % shown)
+                continue
+            copies.append("copy: %s regular sha256=%s equals_target=%s" % (
+                shown, hashlib.sha256(contents).hexdigest(), "yes" if contents == target_bytes else "no"))
+        counts.append("%s: %d/8" % (label, used))
+    return counts + copies
+
+
+def source_verdict(unpatched):
+    """Whether the reconstructed unpatched text is the pinned revision's file.
+
+    A content verdict only, after CRLF is read as LF: it says nothing about
+    whether a different revision would run the patch correctly.
+    """
+    if unpatched is None:
+        return "unknown"
+    digest = hashlib.sha256(unpatched.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+    return "%s pinned revision %s" % ("matches" if digest == PINNED_SHA256 else "differs from", PINNED_REVISION[:8])
+
+
+def print_status(state, generation, unpatched, backup):
+    """The --status report. It reads only; nothing is written or compiled."""
+    target_bytes = src.encode("utf-8")
+    print("STATUS " + state)
+    print("installer: %s %s" % (parser.prog, __version__))
+    print("target_sha256: " + hashlib.sha256(target_bytes).hexdigest())
+    print("generation: " + generation)
+    print("source: " + source_verdict(unpatched))
+    for line in recovery_report(backup, target_bytes):
+        print(line)
+
 
 try:
     st = os.lstat(PATH)
@@ -650,6 +718,33 @@ new_count = src.count(new)
 legacy_count = src.count(legacy_region)
 media_count = src.count(media_region)
 upgrading = False
+
+
+def target_status():
+    """(state, generation, reconstructed unpatched text or None) for --status.
+
+    flush_site still aborts with exit 3 on a target that does not parse,
+    because no layout question about it can be answered.
+    """
+    if new_count:
+        if (new_count, old_count, legacy_count, media_count) == (1, 0, 0, 0) and flush_site(src, new):
+            return "CURRENT", "current", src.replace(new, old, 1)
+        return "MALFORMED", "unknown", None
+    if legacy_count or media_count:
+        region = legacy_region if legacy_count else media_region
+        if (legacy_count, media_count, old_count) in ((1, 0, 0), (0, 1, 0)) and flush_site(src, region):
+            generation = "legacy flush body" if legacy_count else "media-fixed flush body"
+            return "PREVIOUS", generation, src.replace(region, old, 1)
+        return "MALFORMED", "unknown", None
+    if old_count == 1 and flush_site(src, old):
+        return "UNPATCHED", "none", src
+    return "UNRECOGNIZED", "none", src
+
+
+if args.status:
+    print_status(*target_status(), PATH + ".bak-pre-debouncefifo")
+    sys.exit(0)
+
 if new_count:
     if (new_count, old_count, legacy_count, media_count) != (1, 0, 0, 0):
         print(

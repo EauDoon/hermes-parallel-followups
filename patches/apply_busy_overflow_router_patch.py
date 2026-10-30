@@ -24,7 +24,15 @@ import ast, sys, py_compile, os, stat, tempfile, argparse, hashlib
 
 __version__ = "1.0.0"
 
-EPILOG = """results (one line on stdout):
+# The one upstream revision these patches are verified against, and the
+# sha256 of its gateway/run.py. --status compares the reconstructed
+# unpatched file with it. tests/test_installer_status.py keeps both equal
+# to tests/validate_upstream.py.
+PINNED_REVISION = "d7b36070ef807841699ad32c5b6af547fee3ff64"
+PINNED_SHA256 = "36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3767dddbda89"
+
+EPILOG = """results (the first line on stdout starts with one of these; an ABORT may
+add a detail line, and --status prints key: value lines after its STATUS line):
   APPLICABLE          --check: the patch can be installed
   UPGRADE_APPLICABLE  --check: an older injected generation can be upgraded
   ALREADY_PATCHED     the current patch is already installed; nothing changed
@@ -34,6 +42,8 @@ EPILOG = """results (one line on stdout):
   PATCHED_OK          the patch was installed or upgraded
   REVERSED_OK         the patch was removed
   ABORT: <reason>     refused; the target is unchanged
+  STATUS <state>      --status: UNPATCHED, CURRENT, PREVIOUS, EDITED,
+                      MALFORMED or UNRECOGNIZED
 
 Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
 recovery or target-change failure.
@@ -59,8 +69,14 @@ parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py",
                     help="the gateway/run.py to patch (default: %(default)s)")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
 parser.add_argument("--reverse", action="store_true", help="remove the current patch, or a router block from an earlier release, while preserving unrelated edits")
+parser.add_argument("--status", action="store_true",
+                    help="report the installed generation, the pinned-source match and the recovery copies; writes nothing")
 parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
 args = parser.parse_args()
+# Validated by hand: a mutually exclusive group holding --check and --reverse
+# would also reject the existing --check --reverse.
+if args.status and (args.check or args.reverse):
+    parser.error("--status cannot be combined with --check or --reverse")
 PATH = args.path
 
 
@@ -176,6 +192,58 @@ def recovery_slot(base, contents):
         "no free recovery slot beside %s; preserve or relocate them "
         "before retrying" % base
     )
+
+
+def recovery_report(base, target_bytes):
+    """Slot usage and one line per recovery copy beside the target, for --status."""
+    counts, copies = [], []
+    for family, label in (("", "backup_slots"), (".upgrade", "upgrade_slots"), (".reverse", "reverse_slots")):
+        used = 0
+        for ordinal in range(1, 9):
+            name = base + family + ("" if ordinal == 1 else ".%d" % ordinal)
+            try:
+                info = os.lstat(name)
+            except FileNotFoundError:
+                continue
+            used += 1
+            shown = os.path.basename(name)
+            if not stat.S_ISREG(info.st_mode):
+                copies.append("copy: %s not-regular" % shown)
+                continue
+            try:
+                contents = checked_read(name)
+            except OSError:
+                copies.append("copy: %s regular unreadable" % shown)
+                continue
+            copies.append("copy: %s regular sha256=%s equals_target=%s" % (
+                shown, hashlib.sha256(contents).hexdigest(), "yes" if contents == target_bytes else "no"))
+        counts.append("%s: %d/8" % (label, used))
+    return counts + copies
+
+
+def source_verdict(unpatched):
+    """Whether the reconstructed unpatched text is the pinned revision's file.
+
+    A content verdict only, after CRLF is read as LF: it says nothing about
+    whether a different revision would run the patch correctly.
+    """
+    if unpatched is None:
+        return "unknown"
+    digest = hashlib.sha256(unpatched.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+    return "%s pinned revision %s" % ("matches" if digest == PINNED_SHA256 else "differs from", PINNED_REVISION[:8])
+
+
+def print_status(state, generation, unpatched, backup):
+    """The --status report. It reads only; nothing is written or compiled."""
+    target_bytes = src.encode("utf-8")
+    print("STATUS " + state)
+    print("installer: %s %s" % (parser.prog, __version__))
+    print("target_sha256: " + hashlib.sha256(target_bytes).hexdigest())
+    print("generation: " + generation)
+    print("source: " + source_verdict(unpatched))
+    for line in recovery_report(backup, target_bytes):
+        print(line)
+
 
 try:
     st = os.lstat(PATH)
@@ -896,6 +964,31 @@ def recovery_path():
         )
     return recovery_slot(path, src.encode("utf-8"))
 
+
+def target_status():
+    """(state, generation, reconstructed unpatched text or None) for --status."""
+    if block_count:
+        if ((block_count, hook_new_count, marker_count, anchor_count) == (1, 1, 1, 1)
+                and src.index(block_marker) < src.index(anchor) < src.index(hook_new)):
+            return "CURRENT", "current", src.replace(block, "", 1).replace(hook_new, hook_old, 1)
+        return "MALFORMED", "unknown", None
+    if marker_count or hook_new_count:
+        try:
+            block_start, block_end, known = older_install()
+        except Refusal:
+            return "MALFORMED", "unknown", None
+        if known is None:
+            return "EDITED", "unknown", None
+        unpatched = src[:block_start] + target_text(known[1]) + src[block_end:]
+        return "PREVIOUS", known[0], unpatched.replace(hook_new, hook_old, 1)
+    if src.count(hook_old) == 1 and anchor_count == 1:
+        return "UNPATCHED", "none", src
+    return "UNRECOGNIZED", "none", src
+
+
+if args.status:
+    print_status(*target_status(), PATH + ".bak-pre-overflowrouter")
+    sys.exit(0)
 
 if block_count:
     counts = (block_count, hook_new_count, marker_count, anchor_count)

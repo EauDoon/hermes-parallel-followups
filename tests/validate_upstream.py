@@ -298,6 +298,18 @@ def installer_constants(script):
             and isinstance(node.value.value, str)}
 
 
+def require_status(installer, target, state, generation=None):
+    """--status on the real file names the state and matches the pinned source."""
+    result = subprocess.run([sys.executable, str(ROOT / "patches" / installer), str(target), "--status"],
+                            capture_output=True, text=True, check=False)
+    lines = result.stdout.splitlines()
+    require(result.returncode == 0 and lines[:1] == [f"STATUS {state}"]
+            and f"source: matches pinned revision {PIN[:8]}" in lines
+            and (generation is None or f"generation: {generation}" in lines),
+            f"{target.name} --status: {result.stdout}{result.stderr}")
+    print(f"{target.name}: STATUS {state}, source matches pinned revision {PIN[:8]}")
+
+
 def run_router(target, *options):
     result = subprocess.run([sys.executable, str(ROUTER_INSTALLER), str(target), *options],
                             capture_output=True, text=True, check=False)
@@ -323,6 +335,7 @@ def verify_previous_router(original, directory):
     fresh.write_bytes(original)
     reversed_copy.write_bytes(previous)
     upgraded.write_bytes(previous)
+    require_status(ROUTER_INSTALLER.name, upgraded, "PREVIOUS", "1.0.0")
     for target, options, expected in ((fresh, (), "PATCHED_OK"),
                                       (reversed_copy, ("--check", "--reverse"), "REVERSIBLE"),
                                       (reversed_copy, ("--reverse",), "REVERSED_OK"),
@@ -365,6 +378,7 @@ def main(argv=None):
                                 ("run.py", "apply_busy_overflow_router_patch.py")):
             target = Path(td) / name
             target.write_bytes(originals[name])
+            require_status(installer, target, "UNPATCHED")
             for options, expected in ((("--check",), "APPLICABLE"), ((), "PATCHED_OK"),
                                       (("--check",), "ALREADY_PATCHED"),
                                       (("--check", "--reverse"), "REVERSIBLE"),
@@ -376,6 +390,7 @@ def main(argv=None):
                 if expected == "REVERSED_OK":
                     require(target.read_bytes() == originals[name], "Reverse changed original source bytes")
                 print(f"{name}: {expected}")
+            require_status(installer, target, "CURRENT")
             patched[name] = target.read_text(encoding="utf-8")
         verify_previous_router(originals["run.py"], Path(td))
         asyncio.run(verify_fifo(patched["base.py"], patched["run.py"]))

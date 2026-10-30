@@ -6,6 +6,15 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Added
 
+- `--status` on both installers: a read-only report that starts with
+  `STATUS <state>` (`UNPATCHED`, `CURRENT`, `PREVIOUS`, `EDITED` for the
+  router, `MALFORMED` or `UNRECOGNIZED`), then `key: value` lines naming the
+  installer version, the target's sha256, the installed generation, whether
+  the unpatched file it would restore is the pinned revision d7b36070's, the
+  use of each recovery slot family, and every recovery copy with its sha256.
+  It writes nothing. Before, operators compared and hashed recovery copies by
+  hand, learned that slots were full only when a write aborted, and saw only
+  `found 0` on a newer Hermes.
 - `--reverse` on the router installer removes a block from an earlier release
   (v1.0.0, or a build installed from main before tagging began) in one step,
   together with the patched hook, and keeps any code between that block and
