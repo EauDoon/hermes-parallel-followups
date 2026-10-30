@@ -163,6 +163,50 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.runner.prompts), 1)
         self.assertFalse(self.runner._overflow_router_tasks)
 
+    async def test_ack_cancelled_by_another_party_still_runs_generation_once(self):
+        # Admission returned True, so the caller will not queue this event.
+        # An acknowledgment that ends cancelled while its owner was not is a
+        # failed send. It used to end the owner as cancelled too, so the
+        # follow-up was never answered and nothing was logged as a failure.
+        async def raises_cancelled(**kwargs):
+            raise asyncio.CancelledError()
+
+        async def cancelled_from_outside(**kwargs):
+            asyncio.current_task().cancel()
+            await asyncio.sleep(0)
+
+        for send in (raises_cancelled, cancelled_from_outside):
+            with self.subTest(send=send.__name__):
+                runner = Runner()
+                runner.release.set()
+                runner.adapter._send_with_retry = send
+                self.assertTrue(await runner._maybe_route_overflow_to_background(event(), "session"))
+                owner = next(iter(runner._background_tasks))
+                done, _ = await asyncio.wait({owner}, timeout=1.0)
+                self.assertIn(owner, done)
+                self.assertFalse(owner.cancelled())
+                owner.result()
+                self.assertEqual([prompt for prompt, _ in runner.prompts], [event().text])
+                self.assertFalse(runner._overflow_router_tasks)
+                self.assertFalse(runner._background_tasks)
+
+    async def test_cancelled_ack_racing_owner_cancellation_never_starts_generation(self):
+        # The case above must not turn real owner cancellation into a run.
+        async def cancelled_with_owner(**kwargs):
+            owner = next(iter(self.runner._background_tasks))
+            asyncio.get_running_loop().call_soon(owner.cancel)
+            raise asyncio.CancelledError()
+
+        self.runner.adapter._send_with_retry = cancelled_with_owner
+        self.runner.release.set()
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        owner = next(iter(self.runner._background_tasks))
+        done, _ = await asyncio.wait({owner}, timeout=1.0)
+        self.assertIn(owner, done, "Owner cancellation must not be swallowed")
+        self.assertTrue(owner.cancelled())
+        self.assertFalse(self.runner.prompts)
+        self.assertFalse(self.runner._overflow_router_tasks)
+
     async def test_ack_diagnostic_failure_cannot_drop_an_accepted_followup(self):
         for timeout in (False, True):
             with self.subTest(timeout=timeout):

@@ -9,6 +9,12 @@ All notable changes to the two installers are recorded here. The format follows 
 - A failed diagnostic log after an acknowledgment error or timeout no longer
   drops an already accepted parallel follow-up. The background run still starts
   exactly once, and acknowledgment cleanup and capacity limits are unchanged.
+- An acknowledgment that ends cancelled when its owning task was not
+  cancelled (the adapter's send raised `CancelledError`, or another task
+  cancelled it) is now treated as a failed send, so the accepted parallel
+  follow-up still runs once. It used to end the owning task as cancelled,
+  which dropped the follow-up without a warning. Cancelling the owning task
+  still prevents the run.
 
 ## [1.0.0] - 2026-10-09
 
