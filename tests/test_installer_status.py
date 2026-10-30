@@ -185,7 +185,9 @@ class StatusTests(unittest.TestCase):
                               % hashlib.sha256(target.read_bytes()).hexdigest(), copies)
         names = sorted(path.name for path in directory.iterdir())
         before = {name: (directory / name).read_bytes() for name in names}
-        pycache = directory / "pycache-probe"
+        # Bytecode for the interpreter's own imports goes to a prefix
+        # outside the target directory; nothing of the target may land there.
+        pycache = self.fresh()
         result = run(ROUTER, target, "--status", pycache=pycache)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         first, fields, copies = report(result)
@@ -202,7 +204,7 @@ class StatusTests(unittest.TestCase):
         # Read-only: the same files with the same bytes, and no bytecode.
         self.assertEqual(sorted(path.name for path in directory.iterdir()), names)
         self.assertEqual({name: (directory / name).read_bytes() for name in names}, before)
-        self.assertFalse(pycache.exists())
+        self.assertEqual([path for path in pycache.rglob("*") if path.name.startswith("target")], [])
 
     def test_a_non_regular_slot_is_reported(self):
         for script in (ROUTER, DEBOUNCE):

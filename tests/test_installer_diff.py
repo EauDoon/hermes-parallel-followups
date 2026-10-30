@@ -20,7 +20,7 @@ import sys
 import tempfile
 import unittest
 
-from test_patch_installers import ROOT, string_constants, unpatched_source
+from test_patch_installers import ROOT, entries, string_constants, unpatched_source
 
 
 ROUTER = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
@@ -85,7 +85,7 @@ class DiffTests(unittest.TestCase):
             for copy in (shown, written):
                 result = run(script, copy, *setup)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        before_listing = sorted(path.name for path in shown.parent.iterdir())
+        before_listing = entries(shown.parent)
         before = shown.read_bytes()
 
         diffed = run(script, shown, *options, "--diff")
@@ -95,7 +95,7 @@ class DiffTests(unittest.TestCase):
         self.assertEqual(first, token)
         self.assertEqual(first, split(checked)[0])
         self.assertEqual(shown.read_bytes(), before)
-        self.assertEqual(sorted(path.name for path in shown.parent.iterdir()), before_listing)
+        self.assertEqual(entries(shown.parent), before_listing)
 
         applied = run(script, written, *options)
         self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
@@ -135,13 +135,13 @@ class DiffTests(unittest.TestCase):
                 Path(name).write_bytes(b"operator copy %d\n" % ordinal)
             for target, code in ((unsupported, 2), (full, 3)):
                 with self.subTest(script=script.name, exit=code):
-                    listing = sorted(path.name for path in target.parent.iterdir())
+                    listing = entries(target.parent)
                     diffed = run(script, target, "--diff")
                     checked = run(script, target, "--check")
                     self.assertEqual(diffed.returncode, code, diffed.stdout + diffed.stderr)
                     self.assertEqual((diffed.returncode, diffed.stdout), (checked.returncode, checked.stdout))
                     self.assertTrue(diffed.stdout.startswith(b"ABORT:"))
-                    self.assertEqual(sorted(path.name for path in target.parent.iterdir()), listing)
+                    self.assertEqual(entries(target.parent), listing)
 
     def test_nothing_to_change_prints_only_the_token(self):
         for script in (ROUTER, DEBOUNCE):
