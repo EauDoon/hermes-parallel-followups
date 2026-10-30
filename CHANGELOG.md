@@ -4,14 +4,78 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ## [Unreleased]
 
+### Added
+
+- `--diff` on both installers: runs exactly what `--check` runs, prints the
+  same first line, then the unified diff of the target against the bytes an
+  install, upgrade or (with `--reverse`) uninstall would write. It writes
+  nothing. A refusal prints what `--check` prints, with the same exit code.
+  The diff is UTF-8 with LF line endings, so a CRLF target shows no carriage
+  returns. Before, `--check` gave only a verdict, and a router upgrade could
+  not be reviewed before it replaced the production file.
+- `--status` on both installers: a read-only report that starts with
+  `STATUS <state>` (`UNPATCHED`, `CURRENT`, `PREVIOUS`, `EDITED` for the
+  router, `MALFORMED` or `UNRECOGNIZED`), then `key: value` lines naming the
+  installer version, the target's sha256, the installed generation, whether
+  the unpatched file it would restore is the pinned revision d7b36070's, the
+  use of each recovery slot family, and every recovery copy with its sha256.
+  It writes nothing. Before, operators compared and hashed recovery copies by
+  hand, learned that slots were full only when a write aborted, and saw only
+  `found 0` on a newer Hermes.
+- `--reverse` on the router installer removes a block from an earlier release
+  (v1.0.0, or a build installed from main before tagging began) in one step,
+  together with the patched hook, and keeps any code between that block and
+  the busy handler. It used to refuse every block but the current one, so an
+  older install had to be upgraded before it could be uninstalled. An edited
+  or unknown block still aborts.
+
 ### Changed
 
+- In `independent` mode the router now runs two self-contained question
+  shapes in parallel that it used to queue: an ordinal before a calendar or
+  legal noun (`the 18th century`, `the 14th amendment`, `the 16th president`,
+  `a 50th wedding anniversary`) and `also known as`, `also called`,
+  `also named` or `also referred to`. A list pick (`the 2nd one`), a rank
+  (`3rd place`), an edition, `earlier`, and a leading `also` stay queued.
+  `off` and `all` are unchanged.
+- The router's injected block changed, so an existing router install reports
+  `UPGRADE_APPLICABLE` once and keeps the block it replaces in one `.upgrade`
+  recovery slot. This batches the two acknowledgment fixes below and the
+  classifier change above into a single upgrade.
+- The README compatibility table lists upstream v0.22.5
+  (bf0203a794a07aac3ff764972ab9087baa4e4f4e) as known incompatible: the busy
+  handler and the FIFO moved to `gateway/run_busy.py`, and both installers
+  refuse it with `found 0`. Support stays pinned to d7b36070.
+- The offline CI matrix checks out full history, so the list of released
+  router blocks is checked against the first-parent history of main.
 - Python 3.15 is a blocking CI job on Linux and Windows. Its final release
   is out, which is when the workflow said the non-blocking job would be
   promoted.
 
 ### Fixed
 
+- A router upgrade no longer deletes code it does not own. It replaced
+  everything from the injected block marker to the busy-handler anchor, so a
+  method between an older router block and `_handle_active_session_busy_message`
+  (an operator's, another patch's, or an upstream merge's) was removed while
+  the installer printed `PATCHED_OK`; only the `.upgrade` copy kept it. Every
+  block that shipped on main is now listed by length and hash, replaced
+  exactly, and whatever follows it is kept. An unknown region is still
+  upgraded when all of it is router code. When it holds anything else, the
+  upgrade aborts with exit 2, names the first such statement and its line,
+  and changes nothing.
+- Repeat install and uninstall cycles no longer dead-end on a recovery copy.
+  Applying, reversing, updating Hermes (or editing the file) and applying
+  again aborted with exit 3, `existing recovery backup differs`, and so did a
+  second reverse after a reapply. The original backup and `.reverse` copies
+  now take slots the way upgrade copies already did: the name, then `.2` up to
+  `.8`. An identical copy is reused, a different one is kept, and a write that
+  finds all eight slots taken aborts with `no free recovery slot`, exit 3.
+  Nothing is ever overwritten, and a slot that is not a regular file still
+  aborts. `--check` resolves the same slot as the write.
+- `--help` no longer says every result is one line on stdout. The result
+  token starts the first line; an `ABORT` may add a detail line, and `--diff`
+  and `--status` print more lines after it.
 - A failed diagnostic log after an acknowledgment error or timeout no longer
   drops an already accepted parallel follow-up. The background run still starts
   exactly once, and acknowledgment cleanup and capacity limits are unchanged.

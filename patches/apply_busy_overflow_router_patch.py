@@ -20,22 +20,42 @@ Gated by display.busy_overflow_background:
 Idempotent, backed up, syntax-checked.
 Usage: apply_busy_overflow_router_patch.py [/opt/hermes/gateway/run.py]
 """
-import ast, sys, py_compile, os, stat, tempfile, argparse
+import ast, sys, py_compile, os, stat, tempfile, argparse, hashlib, difflib
 
 __version__ = "1.0.0"
 
-EPILOG = """results (one line on stdout):
+# The one upstream revision these patches are verified against, and the
+# sha256 of its gateway/run.py. --status compares the reconstructed
+# unpatched file with it. tests/test_installer_status.py keeps both equal
+# to tests/validate_upstream.py.
+PINNED_REVISION = "d7b36070ef807841699ad32c5b6af547fee3ff64"
+PINNED_SHA256 = "36429599eefc193ba6b33c077d0f92b3933f1173c8577b9ac61c3767dddbda89"
+
+EPILOG = """results (the first line on stdout starts with one of these; an ABORT may
+add a detail line, --diff prints the unified diff after a successful --check
+token, and --status prints key: value lines after its STATUS line):
   APPLICABLE          --check: the patch can be installed
   UPGRADE_APPLICABLE  --check: an older injected generation can be upgraded
   ALREADY_PATCHED     the current patch is already installed; nothing changed
-  REVERSIBLE          --check --reverse: the current patch can be removed
+  REVERSIBLE          --check --reverse: the current patch, or a router block
+                      from an earlier release, can be removed
   ALREADY_UNPATCHED   --reverse: no patch is installed; nothing changed
   PATCHED_OK          the patch was installed or upgraded
   REVERSED_OK         the patch was removed
   ABORT: <reason>     refused; the target is unchanged
+  STATUS <state>      --status: UNPATCHED, CURRENT, PREVIOUS, EDITED,
+                      MALFORMED or UNRECOGNIZED
 
 Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
 recovery or target-change failure.
+
+Recovery copies sit beside the target and are never overwritten:
+  <target>.bak-pre-overflowrouter          source before a fresh install
+  <target>.bak-pre-overflowrouter.upgrade  source before an upgrade
+  <target>.bak-pre-overflowrouter.reverse  source before an uninstall
+Each name has seven more slots, .2 to .8. A copy already there is kept and
+the next slot is taken (a fresh install or an uninstall reuses one that is
+identical), and a write that finds all eight taken aborts with exit 3.
 
 The router is off until display.busy_overflow_background is set to
 independent or all in the gateway config. See the README for the limits.
@@ -49,9 +69,19 @@ parser = argparse.ArgumentParser(
 parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/run.py",
                     help="the gateway/run.py to patch (default: %(default)s)")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
-parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
+parser.add_argument("--reverse", action="store_true", help="remove the current patch, or a router block from an earlier release, while preserving unrelated edits")
+parser.add_argument("--diff", action="store_true",
+                    help="like --check, then print the unified diff of the exact edit the write would make")
+parser.add_argument("--status", action="store_true",
+                    help="report the installed generation, the pinned-source match and the recovery copies; writes nothing")
 parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
 args = parser.parse_args()
+# Validated by hand: a mutually exclusive group holding --check and --reverse
+# would also reject the existing --check --reverse.
+if args.status and (args.check or args.reverse or args.diff):
+    parser.error("--status cannot be combined with --check, --reverse or --diff")
+if args.diff:
+    args.check = True
 PATH = args.path
 
 
@@ -140,6 +170,104 @@ def write_backup_exclusive(path, contents, mode):
             pass
         raise
     return True
+
+
+def recovery_slot(base, contents):
+    """First recovery copy name beside ``base`` that the write may use.
+
+    The names are ``base``, then ``base.2`` up to ``base.8``. An absent name
+    is used, and a regular file that already holds exactly ``contents`` is
+    reused. A regular file holding anything else is kept, and the next name is
+    tried. A single name made a reapply after a reverse and an edit, or a
+    second reverse after a reapply, abort on the copy the earlier cycle left,
+    with no way forward short of moving recovery files by hand. A non-regular
+    entry still aborts, and nothing is ever overwritten.
+    """
+    for ordinal in range(1, 9):
+        slot = base if ordinal == 1 else "%s.%d" % (base, ordinal)
+        try:
+            info = os.lstat(slot)
+        except FileNotFoundError:
+            return slot
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        if checked_read(slot) == contents:
+            return slot
+    raise OSError(
+        "no free recovery slot beside %s; preserve or relocate them "
+        "before retrying" % base
+    )
+
+
+def recovery_report(base, target_bytes):
+    """Slot usage and one line per recovery copy beside the target, for --status."""
+    counts, copies = [], []
+    for family, label in (("", "backup_slots"), (".upgrade", "upgrade_slots"), (".reverse", "reverse_slots")):
+        used = 0
+        for ordinal in range(1, 9):
+            name = base + family + ("" if ordinal == 1 else ".%d" % ordinal)
+            try:
+                info = os.lstat(name)
+            except FileNotFoundError:
+                continue
+            used += 1
+            shown = os.path.basename(name)
+            if not stat.S_ISREG(info.st_mode):
+                copies.append("copy: %s not-regular" % shown)
+                continue
+            try:
+                contents = checked_read(name)
+            except OSError:
+                copies.append("copy: %s regular unreadable" % shown)
+                continue
+            copies.append("copy: %s regular sha256=%s equals_target=%s" % (
+                shown, hashlib.sha256(contents).hexdigest(), "yes" if contents == target_bytes else "no"))
+        counts.append("%s: %d/8" % (label, used))
+    return counts + copies
+
+
+def source_verdict(unpatched):
+    """Whether the reconstructed unpatched text is the pinned revision's file.
+
+    A content verdict only, after CRLF is read as LF: it says nothing about
+    whether a different revision would run the patch correctly.
+    """
+    if unpatched is None:
+        return "unknown"
+    digest = hashlib.sha256(unpatched.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+    return "%s pinned revision %s" % ("matches" if digest == PINNED_SHA256 else "differs from", PINNED_REVISION[:8])
+
+
+def print_status(state, generation, unpatched, backup):
+    """The --status report. It reads only; nothing is written or compiled."""
+    target_bytes = src.encode("utf-8")
+    print("STATUS " + state)
+    print("installer: %s %s" % (parser.prog, __version__))
+    print("target_sha256: " + hashlib.sha256(target_bytes).hexdigest())
+    print("generation: " + generation)
+    print("source: " + source_verdict(unpatched))
+    for line in recovery_report(backup, target_bytes):
+        print(line)
+
+
+def show_diff(after):
+    """Print the unified diff from the target to ``after`` for --diff.
+
+    Lines are split on the target's own line ending and written as UTF-8 with
+    LF, so a CRLF target shows no carriage returns and a console code page
+    cannot reject a character in the source.
+    """
+    name = os.path.basename(PATH)
+    lines = difflib.unified_diff(src.split(line_ending), after.split(line_ending),
+                                 "a/" + name, "b/" + name, n=3, lineterm="")
+    text = "\n".join(lines) + "\n"
+    sys.stdout.flush()
+    stream = getattr(sys.stdout, "buffer", None)
+    if stream is None:
+        sys.stdout.write(text)
+    else:
+        stream.write(text.encode("utf-8"))
+        stream.flush()
 
 try:
     st = os.lstat(PATH)
@@ -278,7 +406,12 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\\s+(?:option|point|part|step)\\b"
                 r"|\\b(?:the|my|our|your)\\s+(?:code|config|deck|document|draft|file|page|report|sheet|slide)\\b"
                 r"|#\\d"
-                r"|\\b\\d+\\s*(st|nd|rd|th)\\b"
+                # "the 2nd one" and "the 3rd step" point into a list on the
+                # table. Before a calendar or legal noun ("the 18th century",
+                # "the 14th amendment", "the 16th president") an ordinal names
+                # a thing anyone can look up. "edition" and "place" stay
+                # queued: "the 2nd edition" usually means a copy in the chat.
+                r"|\\b\\d+\\s*(st|nd|rd|th)\\b(?![\\s-]+(?:wedding[\\s-]+)?(?:century|centuries|millennium|amendment|anniversary|birthday|dynasty|president)\\b)"
                 r"|\\bas\\s+you\\s+\\w+"
                 r"|\\byou\\s+(said|mentioned|recommended|suggested|are|were|just|gave|wrote)"
                 r"|\\byou\\s+(mean|meant|meaning)\\b"
@@ -313,7 +446,11 @@ BLOCK = '''    # ---------------------------------------------------------------
                 # second reply" name the same turn and were not.
                 r"|\\b(?:first|second|third|next|last)\\s+(?:one|answer|reply|message|point)\\b"
                 r"|\\b(what|how)\\s+about\\b"
+                # "also known as" and "also called" name a thing, and route as
+                # the same question without "also" does. A leading "also" is
+                # still an opener and stays queued.
                 r"|\\balso\\b"
+                r"(?!\\s+(?:known|called|named|referred)\\b)"
                 r"|^\\s*\\[replying\\s+to",
                 re.I,
             )
@@ -581,6 +718,37 @@ BLOCK = '''    # ---------------------------------------------------------------
 
 '''
 
+# Every router block that shipped on main before BLOCK, longest first, as
+# (length of its LF text in characters, sha256 of its UTF-8 bytes, label).
+# An install of one of these is upgraded or reversed exactly, keeping any code
+# that sits between it and the busy-handler anchor. 1.0.0 is the only tagged
+# release; the rest were installed from main before tagging began.
+# tests/test_installer_generations.py derives this set from the first-parent
+# history of main, so a release that changes BLOCK fails the suite until the
+# block it replaces is listed here.
+PREVIOUS_BLOCKS = (
+    (21426, "42f2e003b828b2c9c7c95fe9ac4aeea3d69d5c2dc3f12921e36a5664b2d299bf", "untagged main build"),
+    (20893, "9adffdfb78d160165d6f83c6282940d1aa269c6c4dee33e6fa598b976089bc55", "untagged main build"),
+    (20587, "2c657f6091ea2a30d86b3fbe7a814a187c04964a2c4965a1a3fb8f4806b803bf", "1.0.0"),
+    (18348, "dc071d28f2dd81f5675a6fd98e1e29d595b6e009ef6a48fdd801682e73cf60a0", "untagged main build"),
+    (17976, "3cfdb964c1536d9976804f021132f566e78717b3dc2f7ae9a01cd2c6633ef031", "untagged main build"),
+    (17596, "0fa4b7fbee42f2e3c50b5eb7c95470a7855e8ff9bda41939e8e11a2d7afbe1d4", "untagged main build"),
+    (17425, "37c7772c495cdc2951aaa941e426d977ed46c0ad17862c55310a5e9ff9a5d22f", "untagged main build"),
+    (17111, "10e2c8bc16168ae3c59788e87f62641970714ff33512df45500ad85232ea54ed", "untagged main build"),
+    (16662, "590b1ad083fa431081464590c500c5b790aa1fb497c5e7e40bab06354f3d4caa", "untagged main build"),
+    (16246, "3a6c500e62641fa313485654054588cf5c9e7a7524a32f17a9a3b3cb5a63d2b7", "untagged main build"),
+    (15987, "77182d19efc8b12b835560d5264881ccb342ac129e355ec6384948add005b2f3", "untagged main build"),
+    (15116, "0f68c109f3f030402c14683557a346c0cb5af527c7efad283cf3b5c950b81000", "untagged main build"),
+    (14817, "ced1a5b90bf9650f439a285c84d1f7f3ad03b85688c3168908dce526e3be83c3", "untagged main build"),
+    (14173, "9d1932865d8e335b7219c416467b2e09d6a2385339ab3ee31a0229661d96de33", "untagged main build"),
+    (13893, "ddff9bcf37fd7fda2c2da8a2dfcb2a50712f52bc9985422b41c387192cc1b00e", "untagged main build"),
+    (10238, "d1083aa4070a06a4e695ecdcb8cd527711b7a39f30a0a015a2aed1d80037f934", "untagged main build"),
+    (9894, "22bcef100ad9b59bcaf797d0c3686e2c16e2a301e2ac3225d5fa86c61508bd89", "untagged main build"),
+    (9783, "b2322dd3521e11dfdf792752cde360fc4fb6968829ead74cd3bf7855e864f493", "untagged main build"),
+    (9555, "b9da1d8ca43c63f9879b205f6524d9754f14ceb2ef27248897f4bcdae1638ce3", "untagged main build"),
+    (9504, "2863adf20bb4c530b0d8862b4621479ea1c16232cc2c0b56f16e99775de93451", "untagged main build"),
+)
+
 try:
     src = checked_read(PATH, st).decode("utf-8")
 except (OSError, UnicodeError):
@@ -684,12 +852,118 @@ hook_new_count = src.count(hook_new)
 anchor_count = src.count(anchor)
 
 
+class Refusal(Exception):
+    """A layout no write may touch; the message is the ABORT reason."""
+
+
+ANCHOR_STAND_IN = "    def _busy_handler_anchor(self):\n        pass\n"
+
+
+def class_body(text_lf):
+    """Parse LF class-body text that sits directly above the busy-handler anchor.
+
+    Returns (statements, anchor_decorated), or None when the text is not a
+    class body. A stand-in for the anchor method is appended, so a decorator
+    left above the anchor still parses; it is reported, not counted.
+    """
+    try:
+        tree = ast.parse("class _T:\n    pass\n" + text_lf + ANCHOR_STAND_IN)
+    except (SyntaxError, ValueError):
+        return None
+    body = tree.body[0].body if isinstance(tree.body[0], ast.ClassDef) else []
+    stand_in = body[-1] if body else None
+    if not (isinstance(stand_in, ast.FunctionDef) and stand_in.name == "_busy_handler_anchor"):
+        return None
+    return body[1:-1], bool(stand_in.decorator_list)
+
+
+def defined_names(node):
+    """Class attributes one class-body statement defines."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+    return [name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)]
+
+
+# Every name a router block defines. All earlier blocks define a subset.
+ROUTER_MEMBERS = frozenset(name for node in class_body(BLOCK)[0] for name in defined_names(node))
+
+
+def identify_region(region):
+    """(label, rest) when ``region`` starts with a block in PREVIOUS_BLOCKS.
+
+    ``region`` runs from the block marker to the busy-handler anchor. ``rest``
+    is the LF text after the block. It belongs to someone else, so an upgrade
+    or a reverse must keep it. None when no listed block matches.
+    """
+    region_lf = region.replace("\r\n", "\n")
+    for length, digest, label in PREVIOUS_BLOCKS:
+        if (len(region_lf) >= length
+                and hashlib.sha256(region_lf[:length].encode("utf-8")).hexdigest() == digest):
+            return label, region_lf[length:]
+    return None
+
+
+def older_install():
+    """Locate the router region of an older install.
+
+    Returns (block_start, block_end, known). ``known`` is (label, rest) for a
+    released block and None for an edited or unknown one. Raises Refusal for
+    a layout that no write may touch.
+    """
+    if marker_count != 1:
+        raise Refusal("expected exactly 1 injected block marker, found %d" % marker_count)
+    if hook_new_count != 1:
+        raise Refusal("expected exactly 1 patched hook, found %d" % hook_new_count)
+    if anchor_count != 1:
+        raise Refusal("expected exactly 1 anchor, found %d" % anchor_count)
+    hook_start = src.index(hook_new)
+    block_start = src.index(block_marker)
+    block_end = src.index(anchor)
+    if not block_start < block_end < hook_start:
+        raise Refusal("injected block marker, anchor, and patched hook are out of order")
+    known = identify_region(src[block_start:block_end])
+    if known is not None:
+        parsed = class_body(known[1])
+        if parsed is None:
+            raise Refusal("the code between the router block and the busy-handler anchor does not parse")
+        repeated = sorted({name for node in parsed[0] for name in defined_names(node)} & ROUTER_MEMBERS)
+        if repeated:
+            raise Refusal("malformed install: router members repeated after the block (%s)" % ", ".join(repeated))
+    return block_start, block_end, known
+
+
+def foreign_code(block_start, block_end):
+    """Name the first part of an unknown router region that is not router code.
+
+    An unknown region (an edited block, or a build that never shipped) is
+    replaced whole on upgrade, which is only safe when every statement in it
+    defines a router member. Anything else there would be deleted. Returns
+    None for a router-only region; raises Refusal when it does not parse.
+    """
+    parsed = class_body(src[block_start:block_end].replace("\r\n", "\n"))
+    if parsed is None:
+        raise Refusal("the injected router region does not parse as class code")
+    statements, decorated = parsed
+    first_line = src.count("\n", 0, block_start)
+    for node in statements:
+        names = defined_names(node)
+        outside = [name for name in names if name not in ROUTER_MEMBERS]
+        if outside or not names:
+            line = first_line + node.lineno - 2
+            return ("%r on line %d" % (outside[0], line)) if outside else ("a statement on line %d" % line)
+    if decorated:
+        return "a decorator on the busy-handler anchor"
+    return None
+
+
 def recovery_path():
     """Backup path the write uses, chosen by exactly the rule it writes under.
 
     An upgrade has to keep the copy taken by the first install, so it writes
-    beside it. --check resolves the same path so its verdict matches the write
-    that follows it.
+    beside it. A fresh install and a reverse take the first free or identical
+    slot of their own name. --check resolves the same path so its verdict
+    matches the write that follows it.
     """
     path = PATH + ".bak-pre-overflowrouter" + (".reverse" if args.reverse else "")
     if marker_count and not args.reverse:
@@ -712,8 +986,33 @@ def recovery_path():
             "no free upgrade recovery slot beside %s; preserve or relocate "
             "them before retrying" % path
         )
-    return path
+    return recovery_slot(path, src.encode("utf-8"))
 
+
+def target_status():
+    """(state, generation, reconstructed unpatched text or None) for --status."""
+    if block_count:
+        if ((block_count, hook_new_count, marker_count, anchor_count) == (1, 1, 1, 1)
+                and src.index(block_marker) < src.index(anchor) < src.index(hook_new)):
+            return "CURRENT", "current", src.replace(block, "", 1).replace(hook_new, hook_old, 1)
+        return "MALFORMED", "unknown", None
+    if marker_count or hook_new_count:
+        try:
+            block_start, block_end, known = older_install()
+        except Refusal:
+            return "MALFORMED", "unknown", None
+        if known is None:
+            return "EDITED", "unknown", None
+        unpatched = src[:block_start] + target_text(known[1]) + src[block_end:]
+        return "PREVIOUS", known[0], unpatched.replace(hook_new, hook_old, 1)
+    if src.count(hook_old) == 1 and anchor_count == 1:
+        return "UNPATCHED", "none", src
+    return "UNRECOGNIZED", "none", src
+
+
+if args.status:
+    print_status(*target_status(), PATH + ".bak-pre-overflowrouter")
+    sys.exit(0)
 
 if block_count:
     counts = (block_count, hook_new_count, marker_count, anchor_count)
@@ -733,25 +1032,43 @@ if args.reverse:
     if block_count:
         out = src.replace(block, "", 1).replace(hook_new, hook_old, 1)
     elif marker_count:
-        print("ABORT: only the exact current router can be reversed"); sys.exit(2)
+        # A released older block is removed exactly, together with the
+        # patched hook, so a 1.0.0 install no longer has to be upgraded
+        # before it can be uninstalled. Code after the block is kept.
+        try:
+            block_start, block_end, known = older_install()
+        except Refusal as refusal:
+            print("ABORT: %s" % refusal); sys.exit(2)
+        if known is None:
+            print("ABORT: only the current or a released router block can be reversed; "
+                  "this block is edited or unknown"); sys.exit(2)
+        try:
+            parses(src)
+        except (SyntaxError, ValueError) as error:
+            print("ABORT: target syntax is invalid; target unchanged:\n", error); sys.exit(3)
+        out = src[:block_start] + target_text(known[1]) + src[block_end:]
+        out = out.replace(hook_new, hook_old, 1)
     elif src.count(hook_old) == 1 and anchor_count == 1:
         print("ALREADY_UNPATCHED"); sys.exit(0)
     else:
         print("ABORT: expected an intact current or unpatched router"); sys.exit(2)
 elif marker_count:
-    if marker_count != 1:
-        print("ABORT: expected exactly 1 injected block marker, found %d" % marker_count); sys.exit(2)
-    if hook_new_count != 1:
-        print("ABORT: expected exactly 1 patched hook, found %d" % hook_new_count); sys.exit(2)
-    if anchor_count != 1:
-        print("ABORT: expected exactly 1 anchor, found %d" % anchor_count); sys.exit(2)
-    hook_start = src.index(hook_new)
-    block_start = src.index(block_marker)
-    block_end = src.index(anchor)
-    if not block_start < block_end < hook_start:
-        print("ABORT: injected block marker, anchor, and patched hook are out of order"); sys.exit(2)
+    # The upgrade used to replace everything from the marker to the anchor,
+    # so a method between the old block and the busy handler was deleted
+    # while the installer printed PATCHED_OK. A released block is now
+    # replaced by itself, and an unknown region only when all of it is
+    # router code.
+    try:
+        block_start, block_end, known = older_install()
+        foreign = None if known else foreign_code(block_start, block_end)
+    except Refusal as refusal:
+        print("ABORT: %s" % refusal); sys.exit(2)
+    if foreign:
+        print("ABORT: code that is not part of the router sits between the router block "
+              "and the busy-handler anchor (%s); target unchanged" % foreign); sys.exit(2)
     require_router_symbols()
-    out = src[:block_start] + block + src[block_end:]
+    rest = target_text(known[1]) if known else ""
+    out = src[:block_start] + block + rest + src[block_end:]
 else:
     if src.count(hook_old) != 1:
         print("ABORT: expected exactly 1 hook site, found %d" % src.count(hook_old)); sys.exit(2)
@@ -776,7 +1093,10 @@ if args.check:
     parent = os.path.dirname(os.path.abspath(PATH)) or "."
     if not os.access(parent, os.W_OK | os.X_OK):
         print("ABORT: target directory is not writable; the install cannot create its temporary file:\n", parent); sys.exit(3)
-    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE"); sys.exit(0)
+    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if marker_count else "APPLICABLE")
+    if args.diff:
+        show_diff(out)
+    sys.exit(0)
 
 candidate = bytecode = backup_path = None
 created_backup = False

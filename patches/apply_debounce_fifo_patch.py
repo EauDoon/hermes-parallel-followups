@@ -23,11 +23,20 @@ attached (standalone adapter use, tests).
 Idempotent, backed up, syntax-checked.
 Usage: apply_debounce_fifo_patch.py [/opt/hermes/gateway/platforms/base.py]
 """
-import ast, sys, py_compile, os, stat, tempfile, argparse
+import ast, sys, py_compile, os, stat, tempfile, argparse, hashlib, difflib
 
 __version__ = "1.0.0"
 
-EPILOG = """results (one line on stdout):
+# The one upstream revision these patches are verified against, and the
+# sha256 of its gateway/platforms/base.py. --status compares the reconstructed
+# unpatched file with it. tests/test_installer_status.py keeps both equal
+# to tests/validate_upstream.py.
+PINNED_REVISION = "d7b36070ef807841699ad32c5b6af547fee3ff64"
+PINNED_SHA256 = "6bfdf20de31ae01fbd088457b91252d2430f9bc45d0a84ba132590be54fc909f"
+
+EPILOG = """results (the first line on stdout starts with one of these; an ABORT may
+add a detail line, --diff prints the unified diff after a successful --check
+token, and --status prints key: value lines after its STATUS line):
   APPLICABLE          --check: the patch can be installed
   UPGRADE_APPLICABLE  --check: an older injected generation can be upgraded
   ALREADY_PATCHED     the current patch is already installed; nothing changed
@@ -36,9 +45,19 @@ EPILOG = """results (one line on stdout):
   PATCHED_OK          the patch was installed or upgraded
   REVERSED_OK         the patch was removed
   ABORT: <reason>     refused; the target is unchanged
+  STATUS <state>      --status: UNPATCHED, CURRENT, PREVIOUS, MALFORMED
+                      or UNRECOGNIZED
 
 Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
 recovery or target-change failure.
+
+Recovery copies sit beside the target and are never overwritten:
+  <target>.bak-pre-debouncefifo            source before a fresh install
+  <target>.bak-pre-debouncefifo.upgrade    source before an upgrade
+  <target>.bak-pre-debouncefifo.reverse    source before an uninstall
+Each name has seven more slots, .2 to .8. A copy already there is kept and
+the next slot is taken (a fresh install or an uninstall reuses one that is
+identical), and a write that finds all eight taken aborts with exit 3.
 """
 
 parser = argparse.ArgumentParser(
@@ -50,8 +69,18 @@ parser.add_argument("path", nargs="?", default="/opt/hermes/gateway/platforms/ba
                     help="the gateway/platforms/base.py to patch (default: %(default)s)")
 parser.add_argument("--check", action="store_true", help="validate applicability without writing files")
 parser.add_argument("--reverse", action="store_true", help="remove the exact current patch while preserving unrelated edits")
+parser.add_argument("--diff", action="store_true",
+                    help="like --check, then print the unified diff of the exact edit the write would make")
+parser.add_argument("--status", action="store_true",
+                    help="report the installed generation, the pinned-source match and the recovery copies; writes nothing")
 parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
 args = parser.parse_args()
+# Validated by hand: a mutually exclusive group holding --check and --reverse
+# would also reject the existing --check --reverse.
+if args.status and (args.check or args.reverse or args.diff):
+    parser.error("--status cannot be combined with --check, --reverse or --diff")
+if args.diff:
+    args.check = True
 PATH = args.path
 
 
@@ -140,6 +169,104 @@ def write_backup_exclusive(path, contents, mode):
             pass
         raise
     return True
+
+
+def recovery_slot(base, contents):
+    """First recovery copy name beside ``base`` that the write may use.
+
+    The names are ``base``, then ``base.2`` up to ``base.8``. An absent name
+    is used, and a regular file that already holds exactly ``contents`` is
+    reused. A regular file holding anything else is kept, and the next name is
+    tried. A single name made a reapply after a reverse and an edit, or a
+    second reverse after a reapply, abort on the copy the earlier cycle left,
+    with no way forward short of moving recovery files by hand. A non-regular
+    entry still aborts, and nothing is ever overwritten.
+    """
+    for ordinal in range(1, 9):
+        slot = base if ordinal == 1 else "%s.%d" % (base, ordinal)
+        try:
+            info = os.lstat(slot)
+        except FileNotFoundError:
+            return slot
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        if checked_read(slot) == contents:
+            return slot
+    raise OSError(
+        "no free recovery slot beside %s; preserve or relocate them "
+        "before retrying" % base
+    )
+
+
+def recovery_report(base, target_bytes):
+    """Slot usage and one line per recovery copy beside the target, for --status."""
+    counts, copies = [], []
+    for family, label in (("", "backup_slots"), (".upgrade", "upgrade_slots"), (".reverse", "reverse_slots")):
+        used = 0
+        for ordinal in range(1, 9):
+            name = base + family + ("" if ordinal == 1 else ".%d" % ordinal)
+            try:
+                info = os.lstat(name)
+            except FileNotFoundError:
+                continue
+            used += 1
+            shown = os.path.basename(name)
+            if not stat.S_ISREG(info.st_mode):
+                copies.append("copy: %s not-regular" % shown)
+                continue
+            try:
+                contents = checked_read(name)
+            except OSError:
+                copies.append("copy: %s regular unreadable" % shown)
+                continue
+            copies.append("copy: %s regular sha256=%s equals_target=%s" % (
+                shown, hashlib.sha256(contents).hexdigest(), "yes" if contents == target_bytes else "no"))
+        counts.append("%s: %d/8" % (label, used))
+    return counts + copies
+
+
+def source_verdict(unpatched):
+    """Whether the reconstructed unpatched text is the pinned revision's file.
+
+    A content verdict only, after CRLF is read as LF: it says nothing about
+    whether a different revision would run the patch correctly.
+    """
+    if unpatched is None:
+        return "unknown"
+    digest = hashlib.sha256(unpatched.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+    return "%s pinned revision %s" % ("matches" if digest == PINNED_SHA256 else "differs from", PINNED_REVISION[:8])
+
+
+def print_status(state, generation, unpatched, backup):
+    """The --status report. It reads only; nothing is written or compiled."""
+    target_bytes = src.encode("utf-8")
+    print("STATUS " + state)
+    print("installer: %s %s" % (parser.prog, __version__))
+    print("target_sha256: " + hashlib.sha256(target_bytes).hexdigest())
+    print("generation: " + generation)
+    print("source: " + source_verdict(unpatched))
+    for line in recovery_report(backup, target_bytes):
+        print(line)
+
+
+def show_diff(after):
+    """Print the unified diff from the target to ``after`` for --diff.
+
+    Lines are split on the target's own line ending and written as UTF-8 with
+    LF, so a CRLF target shows no carriage returns and a console code page
+    cannot reject a character in the source.
+    """
+    name = os.path.basename(PATH)
+    lines = difflib.unified_diff(src.split(line_ending), after.split(line_ending),
+                                 "a/" + name, "b/" + name, n=3, lineterm="")
+    text = "\n".join(lines) + "\n"
+    sys.stdout.flush()
+    stream = getattr(sys.stdout, "buffer", None)
+    if stream is None:
+        sys.stdout.write(text)
+    else:
+        stream.write(text.encode("utf-8"))
+        stream.flush()
 
 try:
     st = os.lstat(PATH)
@@ -575,14 +702,15 @@ def require_runtime_symbols():
 def recovery_path(upgrading):
     """Backup path the write uses.
 
-    A fresh install and a reverse keep the names they already used. Upgrading
-    a previously injected flush body has to leave the original recovery copy
-    alone, or the never-overwrite rule aborts the only write that installs
-    the corrected body.
+    A fresh install and a reverse keep the names they already used, and take
+    the first free or identical slot of that name. Upgrading a previously
+    injected flush body has to leave the original recovery copy alone, or the
+    never-overwrite rule aborts the only write that installs the corrected
+    body.
     """
     path = PATH + ".bak-pre-debouncefifo" + (".reverse" if args.reverse else "")
     if not upgrading:
-        return path
+        return recovery_slot(path, src.encode("utf-8"))
     try:
         info = os.lstat(path)
     except FileNotFoundError:
@@ -614,6 +742,33 @@ new_count = src.count(new)
 legacy_count = src.count(legacy_region)
 media_count = src.count(media_region)
 upgrading = False
+
+
+def target_status():
+    """(state, generation, reconstructed unpatched text or None) for --status.
+
+    flush_site still aborts with exit 3 on a target that does not parse,
+    because no layout question about it can be answered.
+    """
+    if new_count:
+        if (new_count, old_count, legacy_count, media_count) == (1, 0, 0, 0) and flush_site(src, new):
+            return "CURRENT", "current", src.replace(new, old, 1)
+        return "MALFORMED", "unknown", None
+    if legacy_count or media_count:
+        region = legacy_region if legacy_count else media_region
+        if (legacy_count, media_count, old_count) in ((1, 0, 0), (0, 1, 0)) and flush_site(src, region):
+            generation = "legacy flush body" if legacy_count else "media-fixed flush body"
+            return "PREVIOUS", generation, src.replace(region, old, 1)
+        return "MALFORMED", "unknown", None
+    if old_count == 1 and flush_site(src, old):
+        return "UNPATCHED", "none", src
+    return "UNRECOGNIZED", "none", src
+
+
+if args.status:
+    print_status(*target_status(), PATH + ".bak-pre-debouncefifo")
+    sys.exit(0)
+
 if new_count:
     if (new_count, old_count, legacy_count, media_count) != (1, 0, 0, 0):
         print(
@@ -678,7 +833,10 @@ if args.check:
     parent = os.path.dirname(os.path.abspath(PATH)) or "."
     if not os.access(parent, os.W_OK | os.X_OK):
         print("ABORT: target directory is not writable; the install cannot create its temporary file:\n", parent); sys.exit(3)
-    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if upgrading else "APPLICABLE"); sys.exit(0)
+    print("REVERSIBLE" if args.reverse else "UPGRADE_APPLICABLE" if upgrading else "APPLICABLE")
+    if args.diff:
+        show_diff(out)
+    sys.exit(0)
 
 candidate = bytecode = backup_path = None
 created_backup = False

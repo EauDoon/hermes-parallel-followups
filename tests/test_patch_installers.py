@@ -573,6 +573,7 @@ class PatchInstallerTests(unittest.TestCase):
                 backup = Path(str(target) + backup_suffix)
                 previous_backup = b"operator-owned recovery copy\n"
                 backup.write_bytes(previous_backup)
+                original = target.read_bytes()
 
                 result = subprocess.run(
                     [sys.executable, str(script), str(target)],
@@ -585,10 +586,13 @@ class PatchInstallerTests(unittest.TestCase):
                     },
                 )
 
-                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
-                self.assertIn("target unchanged", result.stdout)
-                self.assertEqual(target.read_text(encoding="utf-8"), source)
+                # The operator copy keeps its bytes. The install used to abort
+                # on it with exit 3; it now records the source in the next slot.
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.strip(), "PATCHED_OK")
+                self.assertNotEqual(target.read_text(encoding="utf-8"), source)
                 self.assertEqual(backup.read_bytes(), previous_backup)
+                self.assertEqual(Path(str(backup) + ".2").read_bytes(), original)
                 assert_no_staging_residue(self, directory, target)
 
     def run_installer(self, script, target, directory, *options):
@@ -605,6 +609,8 @@ class PatchInstallerTests(unittest.TestCase):
         # that follows it. The recovery copy is written after the verdict, so
         # a check that ignored it approved a write that then aborted on exit 3.
         # The verdict must be the same for the real write and for --check.
+        # A differing copy now moves the write to the next slot, so the
+        # conflict that still blocks it is a full set of eight slots.
         for script_name, old_name, old_marker, backup_suffix in INSTALLERS:
             for direction, write_options, extra_suffix in (
                 ("apply", (), ""), ("reverse", ("--reverse",), ".reverse"),
@@ -621,8 +627,10 @@ class PatchInstallerTests(unittest.TestCase):
                     if write_options:
                         applied = self.run_installer(script, target, directory)
                         self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
-                    conflicting = Path(str(target) + backup_suffix + extra_suffix)
-                    conflicting.write_bytes(b"operator-owned recovery copy\n")
+                    base = str(target) + backup_suffix + extra_suffix
+                    conflicting = [Path(base)] + [Path("%s.%d" % (base, n)) for n in range(2, 9)]
+                    for copy in conflicting:
+                        copy.write_bytes(b"operator-owned recovery copy\n")
                     installed = target.read_bytes()
 
                     for extra in (write_options, (*write_options, "--check")):
@@ -631,13 +639,12 @@ class PatchInstallerTests(unittest.TestCase):
                             result = self.run_installer(script, target, directory, *extra)
 
                             self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
-                            self.assertIn(
-                                "existing recovery backup differs", result.stdout,
-                            )
+                            self.assertIn("no free recovery slot", result.stdout)
                             self.assertEqual(target.read_bytes(), installed)
-                            self.assertEqual(
-                                conflicting.read_bytes(), b"operator-owned recovery copy\n",
-                            )
+                            for copy in conflicting:
+                                self.assertEqual(
+                                    copy.read_bytes(), b"operator-owned recovery copy\n",
+                                )
                             self.assertEqual(entries(directory), before)
                             assert_no_staging_residue(self, directory, target)
 
