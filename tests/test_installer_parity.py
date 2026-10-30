@@ -24,7 +24,7 @@ ROUTER = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
 DEBOUNCE = ROOT / "patches" / "apply_debounce_fifo_patch.py"
 SHARED_HELPERS = (
     "checked_read", "guard_target", "parses", "recovery_copy_conflict",
-    "write_backup_exclusive", "_target_binds", "_binds",
+    "write_backup_exclusive", "recovery_slot", "_target_binds", "_binds",
 )
 TAIL_TARGETS = ["candidate", "bytecode", "backup_path"]
 

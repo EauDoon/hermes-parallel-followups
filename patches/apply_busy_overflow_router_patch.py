@@ -37,6 +37,14 @@ EPILOG = """results (one line on stdout):
 Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
 recovery or target-change failure.
 
+Recovery copies sit beside the target and are never overwritten:
+  <target>.bak-pre-overflowrouter          source before a fresh install
+  <target>.bak-pre-overflowrouter.upgrade  source before an upgrade
+  <target>.bak-pre-overflowrouter.reverse  source before an uninstall
+Each name has seven more slots, .2 to .8. A copy already there is kept and
+the next slot is taken (a fresh install or an uninstall reuses one that is
+identical), and a write that finds all eight taken aborts with exit 3.
+
 The router is off until display.busy_overflow_background is set to
 independent or all in the gateway config. See the README for the limits.
 """
@@ -140,6 +148,33 @@ def write_backup_exclusive(path, contents, mode):
             pass
         raise
     return True
+
+
+def recovery_slot(base, contents):
+    """First recovery copy name beside ``base`` that the write may use.
+
+    The names are ``base``, then ``base.2`` up to ``base.8``. An absent name
+    is used, and a regular file that already holds exactly ``contents`` is
+    reused. A regular file holding anything else is kept, and the next name is
+    tried. A single name made a reapply after a reverse and an edit, or a
+    second reverse after a reapply, abort on the copy the earlier cycle left,
+    with no way forward short of moving recovery files by hand. A non-regular
+    entry still aborts, and nothing is ever overwritten.
+    """
+    for ordinal in range(1, 9):
+        slot = base if ordinal == 1 else "%s.%d" % (base, ordinal)
+        try:
+            info = os.lstat(slot)
+        except FileNotFoundError:
+            return slot
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        if checked_read(slot) == contents:
+            return slot
+    raise OSError(
+        "no free recovery slot beside %s; preserve or relocate them "
+        "before retrying" % base
+    )
 
 try:
     st = os.lstat(PATH)
@@ -697,8 +732,9 @@ def recovery_path():
     """Backup path the write uses, chosen by exactly the rule it writes under.
 
     An upgrade has to keep the copy taken by the first install, so it writes
-    beside it. --check resolves the same path so its verdict matches the write
-    that follows it.
+    beside it. A fresh install and a reverse take the first free or identical
+    slot of their own name. --check resolves the same path so its verdict
+    matches the write that follows it.
     """
     path = PATH + ".bak-pre-overflowrouter" + (".reverse" if args.reverse else "")
     if marker_count and not args.reverse:
@@ -721,7 +757,7 @@ def recovery_path():
             "no free upgrade recovery slot beside %s; preserve or relocate "
             "them before retrying" % path
         )
-    return path
+    return recovery_slot(path, src.encode("utf-8"))
 
 
 if block_count:

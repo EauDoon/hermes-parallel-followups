@@ -23,6 +23,15 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Fixed
 
+- Repeat install and uninstall cycles no longer dead-end on a recovery copy.
+  Applying, reversing, updating Hermes (or editing the file) and applying
+  again aborted with exit 3, `existing recovery backup differs`, and so did a
+  second reverse after a reapply. The original backup and `.reverse` copies
+  now take slots the way upgrade copies already did: the name, then `.2` up to
+  `.8`. An identical copy is reused, a different one is kept, and a write that
+  finds all eight slots taken aborts with `no free recovery slot`, exit 3.
+  Nothing is ever overwritten, and a slot that is not a regular file still
+  aborts. `--check` resolves the same slot as the write.
 - A failed diagnostic log after an acknowledgment error or timeout no longer
   drops an already accepted parallel follow-up. The background run still starts
   exactly once, and acknowledgment cleanup and capacity limits are unchanged.

@@ -39,6 +39,14 @@ EPILOG = """results (one line on stdout):
 
 Exit codes: 0 success, 2 incompatible target or argument, 3 staging, compile,
 recovery or target-change failure.
+
+Recovery copies sit beside the target and are never overwritten:
+  <target>.bak-pre-debouncefifo            source before a fresh install
+  <target>.bak-pre-debouncefifo.upgrade    source before an upgrade
+  <target>.bak-pre-debouncefifo.reverse    source before an uninstall
+Each name has seven more slots, .2 to .8. A copy already there is kept and
+the next slot is taken (a fresh install or an uninstall reuses one that is
+identical), and a write that finds all eight taken aborts with exit 3.
 """
 
 parser = argparse.ArgumentParser(
@@ -140,6 +148,33 @@ def write_backup_exclusive(path, contents, mode):
             pass
         raise
     return True
+
+
+def recovery_slot(base, contents):
+    """First recovery copy name beside ``base`` that the write may use.
+
+    The names are ``base``, then ``base.2`` up to ``base.8``. An absent name
+    is used, and a regular file that already holds exactly ``contents`` is
+    reused. A regular file holding anything else is kept, and the next name is
+    tried. A single name made a reapply after a reverse and an edit, or a
+    second reverse after a reapply, abort on the copy the earlier cycle left,
+    with no way forward short of moving recovery files by hand. A non-regular
+    entry still aborts, and nothing is ever overwritten.
+    """
+    for ordinal in range(1, 9):
+        slot = base if ordinal == 1 else "%s.%d" % (base, ordinal)
+        try:
+            info = os.lstat(slot)
+        except FileNotFoundError:
+            return slot
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("existing recovery backup is not a regular file")
+        if checked_read(slot) == contents:
+            return slot
+    raise OSError(
+        "no free recovery slot beside %s; preserve or relocate them "
+        "before retrying" % base
+    )
 
 try:
     st = os.lstat(PATH)
@@ -575,14 +610,15 @@ def require_runtime_symbols():
 def recovery_path(upgrading):
     """Backup path the write uses.
 
-    A fresh install and a reverse keep the names they already used. Upgrading
-    a previously injected flush body has to leave the original recovery copy
-    alone, or the never-overwrite rule aborts the only write that installs
-    the corrected body.
+    A fresh install and a reverse keep the names they already used, and take
+    the first free or identical slot of that name. Upgrading a previously
+    injected flush body has to leave the original recovery copy alone, or the
+    never-overwrite rule aborts the only write that installs the corrected
+    body.
     """
     path = PATH + ".bak-pre-debouncefifo" + (".reverse" if args.reverse else "")
     if not upgrading:
-        return path
+        return recovery_slot(path, src.encode("utf-8"))
     try:
         info = os.lstat(path)
     except FileNotFoundError:
