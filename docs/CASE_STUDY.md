@@ -82,7 +82,7 @@ From the repository root, run:
 python3 tests/run_offline.py
 ```
 
-Recorded run on 09-10-2026: Windows 11 (build 26200), Python 3.12.10 (`py --version`). The same command also passed with CPython 3.11.15 and 3.14.7 on that machine, and CI runs it on Linux and Windows with Python 3.10 to 3.14.
+Recorded run on 09-10-2026: Windows 11 (build 26200), Python 3.12.10 (`py --version`). The same command also passed with CPython 3.11.15 and 3.14.7 on that machine, and CI now runs it on Linux and Windows with Python 3.10 to 3.15.
 
 ```text
 test_classifier.py: 115 cases, ALL PASS

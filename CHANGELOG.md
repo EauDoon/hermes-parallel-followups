@@ -4,6 +4,12 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ## [Unreleased]
 
+### Changed
+
+- Python 3.15 is a blocking CI job on Linux and Windows. Its final release
+  is out, which is when the workflow said the non-blocking job would be
+  promoted.
+
 ### Fixed
 
 - A failed diagnostic log after an acknowledgment error or timeout no longer
