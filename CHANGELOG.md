@@ -42,6 +42,12 @@ All notable changes to the two installers are recorded here. The format follows 
   `UPGRADE_APPLICABLE` once and keeps the block it replaces in one `.upgrade`
   recovery slot. This batches the two acknowledgment fixes below and the
   classifier change above into a single upgrade.
+- The README compatibility table lists upstream v0.22.5
+  (bf0203a794a07aac3ff764972ab9087baa4e4f4e) as known incompatible: the busy
+  handler and the FIFO moved to `gateway/run_busy.py`, and both installers
+  refuse it with `found 0`. Support stays pinned to d7b36070.
+- The offline CI matrix checks out full history, so the list of released
+  router blocks is checked against the first-parent history of main.
 - Python 3.15 is a blocking CI job on Linux and Windows. Its final release
   is out, which is when the workflow said the non-blocking job would be
   promoted.
@@ -67,6 +73,9 @@ All notable changes to the two installers are recorded here. The format follows 
   finds all eight slots taken aborts with `no free recovery slot`, exit 3.
   Nothing is ever overwritten, and a slot that is not a regular file still
   aborts. `--check` resolves the same slot as the write.
+- `--help` no longer says every result is one line on stdout. The result
+  token starts the first line; an `ABORT` may add a detail line, and `--diff`
+  and `--status` print more lines after it.
 - A failed diagnostic log after an acknowledgment error or timeout no longer
   drops an already accepted parallel follow-up. The background run still starts
   exactly once, and acknowledgment cleanup and capacity limits are unchanged.

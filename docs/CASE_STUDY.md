@@ -82,12 +82,12 @@ From the repository root, run:
 python3 tests/run_offline.py
 ```
 
-Recorded run on 09-10-2026: Windows 11 (build 26200), Python 3.12.10 (`py --version`). The same command also passed with CPython 3.11.15 and 3.14.7 on that machine, and CI now runs it on Linux and Windows with Python 3.10 to 3.15.
+Recorded run on 31-10-2026: Windows 11 (build 26200), Python 3.12.10 (`py --version`), in a clone with full history. CI runs the same command on Linux and Windows with Python 3.10 to 3.15.
 
 ```text
-test_classifier.py: 115 cases, ALL PASS
+test_classifier.py: 133 cases, ALL PASS
 test_router.py: 13 cases, 0 failures
-test_router_lifecycle.py: 18 tests, OK
+test_router_lifecycle.py: 24 tests, OK
 test_patch_installers.py: 26 tests, OK (skipped=5)
 test_patch_workflows.py: 9 tests, OK
 test_transcript_scan.py: 4 tests, OK
@@ -96,10 +96,14 @@ test_debounce_flush.py: 8 tests, OK
 test_installer_parity.py: 8 tests, OK
 test_installed_hermes_guard.py: 1 test, OK
 test_versioning.py: 6 tests, OK
+test_recovery_slots.py: 6 tests, OK
+test_installer_generations.py: 9 tests, OK (PREVIOUS_BLOCKS_HISTORY_OK n=20)
+test_installer_status.py: 8 tests, OK
+test_installer_diff.py: 5 tests, OK
 OFFLINE_CHECKS_OK
 ```
 
-The five skips are host-dependent. Four are Windows symlink subtests that need symlink privilege (a symlinked target and a symlinked recovery copy, once per installer). One is the POSIX directory-mode test, which does not apply on Windows. Linux CI runs all five. The offline result is synthetic evidence for the injected logic and installer behavior. It is not evidence of gateway startup, message delivery, model calls, throughput, or a production deployment.
+The five skips are host-dependent. Four are Windows symlink subtests that need symlink privilege (a symlinked target and a symlinked recovery copy, once per installer). One is the POSIX directory-mode test, which does not apply on Windows. Linux CI runs all five. `test_installer_generations.py` compares the installer's list of released router blocks with the first-parent history of main; in a shallow clone it skips that one check and prints why, so the CI matrix checks out full history. The offline result is synthetic evidence for the injected logic and installer behavior. It is not evidence of gateway startup, message delivery, model calls, throughput, or a production deployment.
 
 ## 6. Source compatibility boundary
 
@@ -115,7 +119,7 @@ The pinned-source CI job and a local reproduction use the same script. `python3 
 
 The offline suite runs the gate's refusal paths and its static contract checks on synthetic sources, which need no upstream source, as `test_validate_upstream.py`; the local run in section 5 did not download the fixture. The happy path is recorded from CI. In pull request run [37933190805](https://github.com/EauDoon/hermes-parallel-followups/actions/runs/37933190805) on 09-10-2026, for commit 19d0886, the pinned-source job downloaded the three files, matched all three hashes, and printed `PINNED_CONTRACT_OK`, `PINNED_FIFO_OK`, and `PINNED_LIFECYCLE_OK d7b36070ef807841699ad32c5b6af547fee3ff64`. A later change needs its own successful run before it counts as evidence. The separate `tests/test_debounce_fifo.py` and `tests/test_burst_fullpath.py` checks need a patched Hermes from `HERMES_ROOT` and were not run against one; the offline suite checks only that they refuse cleanly without it.
 
-Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResearch/hermes-agent/commit/ed2d821021e073425994544dca292d36a12cf4a3), checked on 09-09-2026, has a different runner structure. The router installer refuses it because its required hook is absent. Compatibility with that revision and newer releases is unsupported. An anchor failure must not be bypassed.
+Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResearch/hermes-agent/commit/ed2d821021e073425994544dca292d36a12cf4a3), checked on 09-09-2026, has a different runner structure. The router installer refuses it because its required hook is absent. Release v0.22.5 ([bf0203a794a07aac3ff764972ab9087baa4e4f4e](https://github.com/NousResearch/hermes-agent/commit/bf0203a794a07aac3ff764972ab9087baa4e4f4e)), checked on 31-10-2026, moved the busy handler and the FIFO into `gateway/run_busy.py`; both installers refuse it with `found 0`. The flush in its `base.py` still newline-merges with `merge_text=True`, so the defect these patches fix is still present there. Compatibility with those revisions and newer releases is unsupported. An anchor failure must not be bypassed.
 
 ## 7. Install and recovery guardrails
 
