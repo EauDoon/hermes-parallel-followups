@@ -163,6 +163,50 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.runner.prompts), 1)
         self.assertFalse(self.runner._overflow_router_tasks)
 
+    async def test_ack_cancelled_by_another_party_still_runs_generation_once(self):
+        # Admission returned True, so the caller will not queue this event.
+        # An acknowledgment that ends cancelled while its owner was not is a
+        # failed send. It used to end the owner as cancelled too, so the
+        # follow-up was never answered and nothing was logged as a failure.
+        async def raises_cancelled(**kwargs):
+            raise asyncio.CancelledError()
+
+        async def cancelled_from_outside(**kwargs):
+            asyncio.current_task().cancel()
+            await asyncio.sleep(0)
+
+        for send in (raises_cancelled, cancelled_from_outside):
+            with self.subTest(send=send.__name__):
+                runner = Runner()
+                runner.release.set()
+                runner.adapter._send_with_retry = send
+                self.assertTrue(await runner._maybe_route_overflow_to_background(event(), "session"))
+                owner = next(iter(runner._background_tasks))
+                done, _ = await asyncio.wait({owner}, timeout=1.0)
+                self.assertIn(owner, done)
+                self.assertFalse(owner.cancelled())
+                owner.result()
+                self.assertEqual([prompt for prompt, _ in runner.prompts], [event().text])
+                self.assertFalse(runner._overflow_router_tasks)
+                self.assertFalse(runner._background_tasks)
+
+    async def test_cancelled_ack_racing_owner_cancellation_never_starts_generation(self):
+        # The case above must not turn real owner cancellation into a run.
+        async def cancelled_with_owner(**kwargs):
+            owner = next(iter(self.runner._background_tasks))
+            asyncio.get_running_loop().call_soon(owner.cancel)
+            raise asyncio.CancelledError()
+
+        self.runner.adapter._send_with_retry = cancelled_with_owner
+        self.runner.release.set()
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        owner = next(iter(self.runner._background_tasks))
+        done, _ = await asyncio.wait({owner}, timeout=1.0)
+        self.assertIn(owner, done, "Owner cancellation must not be swallowed")
+        self.assertTrue(owner.cancelled())
+        self.assertFalse(self.runner.prompts)
+        self.assertFalse(self.runner._overflow_router_tasks)
+
     async def test_ack_diagnostic_failure_cannot_drop_an_accepted_followup(self):
         for timeout in (False, True):
             with self.subTest(timeout=timeout):
@@ -331,6 +375,86 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.runner.prompts), 1)
         self.assertFalse(self.runner._background_tasks)
         self.assertFalse(self.runner._overflow_router_tasks)
+
+
+def string_constant(name):
+    return next(ast.literal_eval(node.value) for node in ast.parse(SCRIPT.read_text(encoding="utf-8")).body
+                if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == name for target in node.targets))
+
+
+HOOK_LOGGER = logging.getLogger(__name__ + ".hook")
+MESSAGE_TYPE = SimpleNamespace(TEXT="text", PHOTO="photo")
+
+
+def busy_handler(hook):
+    """The exact hook text inside a handler whose last line marks fall-through."""
+    hook_namespace = {"MessageType": MESSAGE_TYPE, "logger": HOOK_LOGGER}
+    exec("async def handler(self, event, session_key):\n" + hook
+         + "        return 'fell through'\n", hook_namespace)
+    return hook_namespace["handler"]
+
+
+class BusySession:
+    def __init__(self, routed=False, input_mode="queue", text_mode="queue"):
+        self._busy_input_mode = input_mode
+        if text_mode is not None:
+            self._busy_text_mode = text_mode
+        self.routed = routed
+        self.calls = []
+
+    async def _maybe_route_overflow_to_background(self, event, session_key):
+        self.calls.append(session_key)
+        if isinstance(self.routed, Exception):
+            raise self.routed
+        return self.routed
+
+
+class PatchedHookTests(unittest.IsolatedAsyncioTestCase):
+    """The hook is the only patched line the busy handler runs.
+
+    It must report the event handled only when the router dispatched it, and
+    otherwise return the unpatched hook's False so the adapter queues it.
+    """
+
+    async def asyncSetUp(self):
+        self.patched = busy_handler(string_constant("HOOK_NEW"))
+        self.unpatched = busy_handler(string_constant("HOOK_OLD"))
+
+    async def test_only_a_dispatched_followup_is_reported_handled(self):
+        text = SimpleNamespace(message_type=MESSAGE_TYPE.TEXT)
+        for routed, expected in ((True, True), (False, False)):
+            with self.subTest(routed=routed):
+                session = BusySession(routed)
+                self.assertIs(await self.patched(session, text, "session"), expected)
+                self.assertEqual(session.calls, ["session"])
+                self.assertIs(await self.unpatched(session, text, "session"), False)
+
+    async def test_a_failing_router_falls_back_to_the_queue(self):
+        session = BusySession(RuntimeError("router bug"))
+        text = SimpleNamespace(message_type=MESSAGE_TYPE.TEXT)
+        with self.assertLogs(HOOK_LOGGER, "WARNING") as logs:
+            self.assertIs(await self.patched(session, text, "session-7"), False)
+        self.assertEqual(session.calls, ["session-7"])
+        self.assertEqual(len(logs.output), 1, logs.output)
+        self.assertIn("session-7", logs.output[0])
+        self.assertIn("falling back to queue merge", logs.output[0])
+
+    async def test_other_busy_paths_never_reach_the_router(self):
+        cases = {
+            "photo": (SimpleNamespace(message_type=MESSAGE_TYPE.PHOTO), BusySession(True)),
+            "interrupt": (SimpleNamespace(message_type=MESSAGE_TYPE.TEXT),
+                          BusySession(True, text_mode="interrupt")),
+            "text-mode-unset": (SimpleNamespace(message_type=MESSAGE_TYPE.TEXT),
+                                BusySession(True, text_mode=None)),
+            "steer": (SimpleNamespace(message_type=MESSAGE_TYPE.TEXT),
+                      BusySession(True, input_mode="steer")),
+        }
+        for name, (busy_event, session) in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(await self.patched(session, busy_event, "session"), "fell through")
+                self.assertEqual(await self.unpatched(session, busy_event, "session"), "fell through")
+                self.assertEqual(session.calls, [])
 
 
 if __name__ == "__main__":

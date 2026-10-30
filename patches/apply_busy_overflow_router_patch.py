@@ -447,7 +447,17 @@ BLOCK = '''    # ---------------------------------------------------------------
                 {acknowledgment}, timeout=self._OVR_ACK_TIMEOUT_SECONDS,
             )
             if acknowledgment in done:
-                acknowledgment.result()
+                # Owner cancellation raises at the wait above, so a child
+                # that ended cancelled here was cancelled by someone else.
+                # That is a failed send. result() would re-raise it, end
+                # this task as cancelled, and drop an admitted follow-up.
+                if acknowledgment.cancelled():
+                    try:
+                        logger.debug("Busy-overflow ack was cancelled")
+                    except Exception:
+                        pass
+                else:
+                    acknowledgment.result()
             else:
                 acknowledgment.cancel()
                 await asyncio.gather(acknowledgment, return_exceptions=True)

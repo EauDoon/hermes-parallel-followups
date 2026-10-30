@@ -15,22 +15,17 @@ jobs:
   offline:
     name: offline (${{ matrix.os }}, ${{ matrix.python }})
     timeout-minutes: 10
-    # The pre-release interpreter is an early signal only. It becomes a
-    # blocking matrix entry once its final release is published.
+    # A pre-release interpreter is an early signal only: list it under
+    # include with experimental: true. It becomes a blocking matrix entry
+    # once its final release is published. 3.15 is final, and setup-python
+    # has no 3.16 build yet, so none is listed.
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
         experimental: [false]
-        include:
-          - os: ubuntu-latest
-            python: '3.15'
-            experimental: true
-          - os: windows-latest
-            python: '3.15'
-            experimental: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
