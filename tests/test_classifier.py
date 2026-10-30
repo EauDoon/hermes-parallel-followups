@@ -113,6 +113,16 @@ MUST_BG = [
     "what is your opinion on remote work for early startups",
     "what is your recommendation for a beginner camera under 500 dollars",
     "what is the periodic table of elements used for",
+    # An ordinal before a calendar or legal noun names a thing anyone can
+    # look up, as does "also known as". The ordinal and "also" cases that
+    # point into the conversation are in the queued list below.
+    "what happened in the 18th century in european trade",
+    "what was life like in 18th-century london for workers",
+    "what does the 14th amendment to the us constitution say",
+    "how do people celebrate a 50th wedding anniversary in japan",
+    "who was the 16th president of the united states",
+    "what is also known as the morning star in astronomy",
+    "which planet is also called the red planet by astronomers",
 ]
 
 MUST_Q = [
@@ -221,6 +231,20 @@ MUST_Q = [
     "is the summary accurate about the revenue numbers",
     "what does the diff change in the parser module",
     "is the chart correct for the monthly revenue figures",
+    # An ordinal that picks from a list stays queued, and so do a rank, an
+    # edition, "earlier", and "also" as an opener. Only an ordinal before a
+    # calendar or legal noun, and "also known as", route.
+    "is the 2nd one cheaper than the first",
+    "what about the 3rd option for the rollout",
+    "how does the 2nd compare with the others in cost",
+    "is the 2nd better for long term cost savings overall",
+    "why did the 3rd step fail in the deployment script",
+    "who won 3rd place in the 2022 world cup final",
+    "what happened earlier in the history of the roman empire",
+    "were the pyramids of giza built earlier than stonehenge",
+    "is the deadline earlier than friday or later",
+    "is the 2nd edition better than the original version",
+    "also known issues with the release are what exactly",
 ]
 
 fails = []

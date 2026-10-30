@@ -6,6 +6,17 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Changed
 
+- In `independent` mode the router now runs two self-contained question
+  shapes in parallel that it used to queue: an ordinal before a calendar or
+  legal noun (`the 18th century`, `the 14th amendment`, `the 16th president`,
+  `a 50th wedding anniversary`) and `also known as`, `also called`,
+  `also named` or `also referred to`. A list pick (`the 2nd one`), a rank
+  (`3rd place`), an edition, `earlier`, and a leading `also` stay queued.
+  `off` and `all` are unchanged.
+- The router's injected block changed, so an existing router install reports
+  `UPGRADE_APPLICABLE` once and keeps the block it replaces in one `.upgrade`
+  recovery slot. This batches the two acknowledgment fixes below and the
+  classifier change above into a single upgrade.
 - Python 3.15 is a blocking CI job on Linux and Windows. Its final release
   is out, which is when the workflow said the non-blocking job would be
   promoted.

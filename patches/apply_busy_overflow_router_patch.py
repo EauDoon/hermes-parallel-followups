@@ -278,7 +278,12 @@ BLOCK = '''    # ---------------------------------------------------------------
                 r"|\\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\\s+(?:option|point|part|step)\\b"
                 r"|\\b(?:the|my|our|your)\\s+(?:code|config|deck|document|draft|file|page|report|sheet|slide)\\b"
                 r"|#\\d"
-                r"|\\b\\d+\\s*(st|nd|rd|th)\\b"
+                # "the 2nd one" and "the 3rd step" point into a list on the
+                # table. Before a calendar or legal noun ("the 18th century",
+                # "the 14th amendment", "the 16th president") an ordinal names
+                # a thing anyone can look up. "edition" and "place" stay
+                # queued: "the 2nd edition" usually means a copy in the chat.
+                r"|\\b\\d+\\s*(st|nd|rd|th)\\b(?![\\s-]+(?:wedding[\\s-]+)?(?:century|centuries|millennium|amendment|anniversary|birthday|dynasty|president)\\b)"
                 r"|\\bas\\s+you\\s+\\w+"
                 r"|\\byou\\s+(said|mentioned|recommended|suggested|are|were|just|gave|wrote)"
                 r"|\\byou\\s+(mean|meant|meaning)\\b"
@@ -313,7 +318,11 @@ BLOCK = '''    # ---------------------------------------------------------------
                 # second reply" name the same turn and were not.
                 r"|\\b(?:first|second|third|next|last)\\s+(?:one|answer|reply|message|point)\\b"
                 r"|\\b(what|how)\\s+about\\b"
+                # "also known as" and "also called" name a thing, and route as
+                # the same question without "also" does. A leading "also" is
+                # still an opener and stays queued.
                 r"|\\balso\\b"
+                r"(?!\\s+(?:known|called|named|referred)\\b)"
                 r"|^\\s*\\[replying\\s+to",
                 re.I,
             )
