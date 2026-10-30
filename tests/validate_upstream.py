@@ -286,6 +286,57 @@ async def verify_fifo(base, runner_source):
     print("PINNED_FIFO_OK: ordered bursts, isolation, empty flush, timer cancellation, cap fallback")
 
 
+ROUTER_INSTALLER = ROOT / "patches" / "apply_busy_overflow_router_patch.py"
+ROUTER_1_0_0 = ROOT / "tests" / "fixtures" / "router_block_1.0.0.txt"
+
+
+def installer_constants(script):
+    """The installer's module-level string constants, read without running it."""
+    return {node.targets[0].id: node.value.value for node in ast.parse(script.read_text(encoding="utf-8")).body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)}
+
+
+def run_router(target, *options):
+    result = subprocess.run([sys.executable, str(ROUTER_INSTALLER), str(target), *options],
+                            capture_output=True, text=True, check=False)
+    return result.returncode, result.stdout.strip(), result.stderr
+
+
+def verify_previous_router(original, directory):
+    """A 1.0.0 router install on the real run.py reverses and upgrades exactly.
+
+    The 1.0.0 block is installed the way v1.0.0 placed it. The current
+    installer must remove it back to the pinned bytes in one step, and must
+    upgrade it to the same bytes a fresh install writes.
+    """
+    constants = installer_constants(ROUTER_INSTALLER)
+    source = original.decode("utf-8")
+    require(source.count(constants["HOOK_OLD"]) == 1 and source.count(constants["ANCHOR"]) == 1,
+            f"run.py: the router hook or anchor is not unique (verified only against {PIN})")
+    block = ROUTER_1_0_0.read_bytes().decode("utf-8")
+    previous = (source.replace(constants["HOOK_OLD"], constants["HOOK_NEW"], 1)
+                .replace(constants["ANCHOR"], block + constants["ANCHOR"], 1)).encode("utf-8")
+    fresh, reversed_copy, upgraded = (directory / name for name in (
+        "run-fresh.py", "run-1.0.0-reverse.py", "run-1.0.0-upgrade.py"))
+    fresh.write_bytes(original)
+    reversed_copy.write_bytes(previous)
+    upgraded.write_bytes(previous)
+    for target, options, expected in ((fresh, (), "PATCHED_OK"),
+                                      (reversed_copy, ("--check", "--reverse"), "REVERSIBLE"),
+                                      (reversed_copy, ("--reverse",), "REVERSED_OK"),
+                                      (upgraded, ("--check",), "UPGRADE_APPLICABLE"),
+                                      (upgraded, (), "PATCHED_OK")):
+        code, stdout, stderr = run_router(target, *options)
+        require(code == 0 and stdout == expected, f"1.0.0 router install {options}: {stdout}{stderr}")
+    require(reversed_copy.read_bytes() == original, "Reversing a 1.0.0 router install changed the pinned source")
+    require(upgraded.read_bytes() == fresh.read_bytes(),
+            "Upgrading a 1.0.0 router install differs from a fresh install")
+    print("PINNED_GENERATIONS_OK: a 1.0.0 router install reverses to the pinned source "
+          "and upgrades to a fresh install")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
@@ -326,6 +377,7 @@ def main(argv=None):
                     require(target.read_bytes() == originals[name], "Reverse changed original source bytes")
                 print(f"{name}: {expected}")
             patched[name] = target.read_text(encoding="utf-8")
+        verify_previous_router(originals["run.py"], Path(td))
         asyncio.run(verify_fifo(patched["base.py"], patched["run.py"]))
     print(f"PINNED_LIFECYCLE_OK {PIN}")
 

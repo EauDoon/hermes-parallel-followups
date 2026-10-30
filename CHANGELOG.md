@@ -4,6 +4,15 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ## [Unreleased]
 
+### Added
+
+- `--reverse` on the router installer removes a block from an earlier release
+  (v1.0.0, or a build installed from main before tagging began) in one step,
+  together with the patched hook, and keeps any code between that block and
+  the busy handler. It used to refuse every block but the current one, so an
+  older install had to be upgraded before it could be uninstalled. An edited
+  or unknown block still aborts.
+
 ### Changed
 
 - In `independent` mode the router now runs two self-contained question
@@ -23,6 +32,16 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Fixed
 
+- A router upgrade no longer deletes code it does not own. It replaced
+  everything from the injected block marker to the busy-handler anchor, so a
+  method between an older router block and `_handle_active_session_busy_message`
+  (an operator's, another patch's, or an upstream merge's) was removed while
+  the installer printed `PATCHED_OK`; only the `.upgrade` copy kept it. Every
+  block that shipped on main is now listed by length and hash, replaced
+  exactly, and whatever follows it is kept. An unknown region is still
+  upgraded when all of it is router code. When it holds anything else, the
+  upgrade aborts with exit 2, names the first such statement and its line,
+  and changes nothing.
 - Repeat install and uninstall cycles no longer dead-end on a recovery copy.
   Applying, reversing, updating Hermes (or editing the file) and applying
   again aborted with exit 3, `existing recovery backup differs`, and so did a

@@ -1,0 +1,373 @@
+    # ------------------------------------------------------------------
+    # Busy-queue overflow router
+    # ------------------------------------------------------------------
+    # Shape-based classification of a follow-up that arrives while the agent
+    # is busy AND at least one follow-up is already queued. "Dependent" text
+    # (a correction, an acknowledgement, a back-reference, a bare pronoun)
+    # must stay in the session queue because a background agent starts with
+    # NO conversation history. Only self-contained questions are safe to run
+    # in parallel. Ambiguity resolves to dependent: a queued message merely
+    # waits, whereas a wrongly-backgrounded one gets answered blind.
+
+    _OVR_MIN_CHARS = 25
+    _OVR_ACK_TIMEOUT_SECONDS = 5.0
+
+    # NOTE: "there" is deliberately absent - existential "are there any X"
+    # is a very common self-contained question form, and
+    # treating it as a back-reference queued them all.
+    _OVR_DEICTIC = frozenset({
+        "it", "its", "this", "that", "these", "those", "them", "they",
+        "one", "ones", "above", "below", "he", "she", "him", "her",
+        "his", "hers", "their", "theirs",
+    })
+
+    # Openers that signal continuation of the turn already in flight.
+    # NOTE: bare imperatives like "do" are deliberately absent - "do it" is
+    # caught by the deictic rule, while "does X ..." must stay routable.
+    _OVR_OPENERS = frozenset({
+        "ok", "okay", "oki", "yes", "yeah", "yep", "yup", "no", "nope",
+        "sure", "thanks", "thank", "great", "nice", "wow", "cool", "perfect",
+        "hi", "hello", "hey", "redo", "stop", "wait", "also", "and", "but",
+        "then", "instead", "actually", "leave", "skip", "continue", "proceed",
+        "go", "complete", "implement", "amend", "fix", "use", "try", "help",
+        "make", "add", "remove", "change", "update", "run", "send", "show",
+        "give", "let", "lets", "please", "pls", "again", "more", "next",
+        "same", "correct", "wrong", "nvm", "nevermind", "hold",
+    })
+
+    _OVR_INTERROG = frozenset({
+        "what", "whats", "why", "how", "who", "whos", "when", "where",
+        "which", "whose", "is", "are", "was", "were", "does", "did", "do",
+        "can", "could", "should", "will", "would", "has", "have", "had",
+        "tell", "explain", "compare", "describe", "define", "any",
+    })
+
+    # Verbs that mutate an artifact already under discussion. Their presence
+    # anywhere means the request acts on the work in flight, so a background
+    # agent (which has no history) cannot serve it. Deliberately excludes
+    # broad verbs like "write"/"build" that also occur in genuine questions.
+    _OVR_ACTION = frozenset({
+        "amend", "adjust", "append", "bold", "bolded", "delete", "edit",
+        "format", "insert", "modify", "redo", "refill", "remove", "rename",
+        "replace", "rerun", "retry", "revise", "reword", "rewrite", "shorten",
+        "simplify", "tweak", "update", "retitle", "unbold", "reformat",
+    })
+
+    _OVR_STOP = frozenset({
+        "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "for",
+        "is", "are", "was", "were", "be", "been", "do", "does", "did", "so",
+        "as", "by", "from", "with", "you", "your", "me", "my", "i", "we",
+        "us", "our", "about", "not", "but", "if", "than", "then", "too",
+        "can", "will", "would", "should", "could", "what", "why", "how",
+        "who", "when", "where", "which", "much", "many", "more", "any",
+    })
+
+    @classmethod
+    def _ovr_backref_re(cls):
+        """Compiled back-reference detector (lazy, cached on the class)."""
+        rx = cls.__dict__.get("_OVR_BACKREF_COMPILED")
+        if rx is None:
+            # "the former"/"the latter" are matched as phrases rather than added
+            # to _OVR_DEICTIC: a bare "former" (former champions, former
+            # employers) is ordinary vocabulary in a self-contained question.
+            # The first-person forms are matched together with their verb for
+            # the same reason: a bare "us" collides with the country, and "me"
+            # would capture "tell me about X", which is self-contained.
+            rx = re.compile(
+                r"\(\s*\d+\s*\)"
+                # "(b)" is the same kind of list reference as "(2)". A capital
+                # "option B" is a label; lowercase "option a family" is not,
+                # so the letter class is case-sensitive.
+                r"|\(\s*[a-d]\s*\)"
+                r"|\b(?:option|point|part|step)\s+(?-i:[A-D])\b"
+                r"|\boption\s*\d"
+                r"|\bpoint\s*\d"
+                r"|\bpart\s*\d"
+                r"|\bstep\s*\d"
+                r"|\b(?:option|point|part|step)\s+(?:one|two|three|four|five|six|seven|eight|nine|ten)\b"
+                r"|\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:option|point|part|step)\b"
+                r"|\b(?:the|my|our|your)\s+(?:code|config|deck|document|draft|file|page|report|sheet|slide)\b"
+                r"|#\d"
+                r"|\b\d+\s*(st|nd|rd|th)\b"
+                r"|\bas\s+you\s+\w+"
+                r"|\byou\s+(said|mentioned|recommended|suggested|are|were|just|gave|wrote)"
+                r"|\byou\s+(mean|meant|meaning)\b"
+                # "you recommended" misses the grammatical "did you recommend",
+                # and "did you decide" was not listed at all. Both ask about
+                # an action the cold agent cannot see. "can you recommend"
+                # does not match, so a new request stays routable.
+                r"|\bdid\s+you\s+(?:say|mention|recommend|suggest|give|write|decide|choose|pick|set|ask|put|mean)\b"
+                r"|\b(?:we|us|our|my)\s+(?:agreed?|decided?|discussed?|chose|chosen|picked|settled|wanted|want|needed|need|think|thought|believe|assumed?|planned?|proposed|concluded|found|noted|asked?|said|say|meant?|meaning|intended?|should|would|could|must|will|can)\b"
+                r"|\b(?:what|how|why|which|where|when|who)\s+(?:did|do|does|are|is|was|were|should|would|could|have|has)\s+(?:we|us|our|my)\b"
+                # "which model did we pick" puts words between the wh-word and
+                # the auxiliary, and "why don't we" contracts it. "should we"
+                # inverts them. "us" stays out of these looser forms so the
+                # country is not read as the pronoun.
+                r"|\b(?:what|how|why|which|where|when|who)\b(?:\s+(?!we\b|us\b|our\b|my\b)\w+){0,4}\s+(?:did|do|does|are|is|was|were|should|would|could|have|has|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|hasn't|hasnt|isn't|isnt|aren't|arent|wasn't|wasnt|weren't|werent|shouldn't|shouldnt|wouldn't|wouldnt|couldn't|couldnt|can't|cant|won't|wont)\s+(?:we|our|my)\b"
+                r"|\b(?:should|would|could|can|do|does|did|are|is|was|were|have|has|will|don't|dont|didn't|didnt|doesn't|doesnt|haven't|havent|isn't|isnt|aren't|arent|can't|cant|won't|wont)\s+(?:we|our|my)\b"
+                # A cold agent cannot see what the user said earlier, or what the
+                # assistant produced. "did I"/"have I" plus a verb, "I said", and
+                # "the X you produced" all point back into the turn in flight.
+                # Present "do I choose" is a how-to question and stays routable.
+                r"|\b(?:did|have|had)\s+I\s+(?:say|mention|ask|tell|send|share|give|write|upload|attach|paste|decide|choose|pick|agree|mean)\b"
+                r"|\bI\s+(?:said|mentioned|asked|told|wrote|meant|pasted)\b"
+                r"|\bthe\s+\w+(?:\s+(?!if\b|when\b|whenever\b|once\b|after\b|before\b|because\b|unless\b|until\b|and\b|or\b)\w+)?\s+you\s+(?:showed|shown|quoted|cited|found|loaded|ran|used|made|created|built|listed|produced|generated|computed|calculated|estimated|provided|described|explained|proposed|drafted|shared|sent|linked|picked|chose|gave|wrote|mentioned|suggested|recommended)\b"
+                # "your answer" and "your figures" name the assistant's own earlier
+                # output. A definite artifact noun followed by a preposition ("the
+                # output of", "the spec for") is usually a general question.
+                r"|\byour\s+(?:answer|reply|response|summary|output|table|chart|figures?|numbers|list|calculation|math|draft|script)\b"
+                r"|\b(?:the|my|our)\s+(?:script|spreadsheet|attachment|screenshot|diff|dataset|email|table|chart|summary|output|logs?|proposal|spec)\b(?!\s+(?:of|for|from|in|on|to|at|with|between|about)\b)"
+                r"|\b(above|earlier|previous|previously)\b"
+                r"|\bthe\s+(?:former|latter)\b"
+                # "the last answer" was queued. "the first answer" and "the
+                # second reply" name the same turn and were not.
+                r"|\b(?:first|second|third|next|last)\s+(?:one|answer|reply|message|point)\b"
+                r"|\b(what|how)\s+about\b"
+                r"|\balso\b"
+                r"|^\s*\[replying\s+to",
+                re.I,
+            )
+            cls._OVR_BACKREF_COMPILED = rx
+        return rx
+
+    @classmethod
+    def _classify_busy_followup(cls, text):
+        """True when ``text`` is self-contained enough to run in background."""
+        import unicodedata
+        if not isinstance(text, str):
+            return False
+        # Invisible format characters can hide a contextual token. Queue
+        # ambiguous input instead of stripping away evidence of dependency.
+        # Backspace, DEL, and the other controls do the same and are not Cf.
+        # Newline, carriage return, and tab are ordinary text.
+        if any(unicodedata.category(char) == "Cf" for char in text):
+            return False
+        if any(unicodedata.category(char) == "Cc" and char not in "\n\r\t" for char in text):
+            return False
+        t = unicodedata.normalize("NFKC", text).replace("\u2019", "'").replace("\u2018", "'").strip()
+        # A combining mark that NFKC does not fold into a letter can sit
+        # inside "former" or "also". Format characters and controls are
+        # already queued above. A mark that recomposes, as in NFD "São",
+        # is ordinary text and is not queued for being a mark.
+        if any(unicodedata.category(char) in ("Mn", "Me") for char in t):
+            return False
+        if re.search(r"(?m)^\s*>", t):
+            return False
+        # Quote-replies and back-references are contextual by definition.
+        # "what's" is already an interrogative after the apostrophe is
+        # stripped, but this scan still sees the contraction, so "what's our"
+        # misses the same "what is our" pattern and runs cold. Expand only
+        # the wh-word form. "what's the difference" stays routable.
+        _backref = re.sub(
+            r"\b(what|where|when|who|why|how)'s\b",
+            r"\1 is",
+            t,
+            flags=re.I,
+        )
+        if cls._ovr_backref_re().search(_backref):
+            return False
+        # Drop a leading gateway timestamp prefix ("[Thu 2026-07-23 16:58 +08]").
+        # Matched on a bracketed group containing a 4-digit year so real text in
+        # brackets is left alone.
+        t = re.sub(r"^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? [+-]\d{2}(?::?\d{2})?\]\s*", "", t).strip()
+        if len(t) < cls._OVR_MIN_CHARS:
+            return False
+        # "these days" / "those days" are time idioms, not back-references.
+        # Without this, "how does the BOJ set rates these days" tripped the
+        # deictic rule and was queued instead of parallelised (same class of
+        # false positive as "there" in _OVR_DEICTIC).
+        _scan = re.sub(r"\b(these|those)\s+days\b", " ", t.lower())
+        # Apostrophes are stripped so "what's"/"it's"/"let's" match the same
+        # entries as "whats"/"its"/"lets" instead of silently missing.
+        words = [w.replace("'", "") for w in re.findall(r"[a-z0-9']+", _scan)]
+        words = [w for w in words if w]
+        if not words:
+            return False
+        if words[0] in cls._OVR_OPENERS:
+            return False
+        if any(w in cls._OVR_DEICTIC for w in words):
+            return False
+        # An artifact-mutating verb anywhere means "act on the work in flight".
+        if any(w in cls._OVR_ACTION for w in words):
+            return False
+        if words[0] not in cls._OVR_INTERROG:
+            return False
+        anchors = [w for w in words if len(w) >= 3 and w not in cls._OVR_STOP]
+        return len(anchors) >= 2
+
+    def _overflow_router_mode(self):
+        """Resolve display.busy_overflow_background -> off|independent|all."""
+        try:
+            cfg = _load_gateway_runtime_config()
+            raw = cfg_get(cfg, "display", "busy_overflow_background", default="")
+        except Exception:
+            return "off"
+        mode = str(raw or "").strip().lower()
+        if mode in ("independent", "all"):
+            return mode
+        if mode in ("true", "yes", "on"):
+            return "independent"
+        return "off"
+
+    def _overflow_router_limit(self, key, default, maximum):
+        """Invalid limits disable dispatch; zero is an explicit queue-only cap."""
+        try:
+            raw = cfg_get(_load_gateway_runtime_config(), "display", key, default=default)
+        except Exception:
+            return 0
+        if not isinstance(raw, bool) and isinstance(raw, int) and 0 <= raw <= maximum:
+            return raw
+        # An invalid value used to disable dispatch with no trace, so an
+        # operator could not tell why nothing ran in parallel. Warn once per
+        # key and value. The warning is advice only: nothing in it may change
+        # the fail-closed result.
+        try:
+            marker = (key, repr(raw))
+            seen = self.__dict__.setdefault("_ovr_invalid_limits", set())
+            if marker not in seen:
+                seen.add(marker)
+                logger.warning(
+                    "Busy-overflow display.%s=%r is not an integer from 0 "
+                    "to %d; parallel dispatch is disabled",
+                    key, raw, maximum,
+                )
+        except Exception:
+            pass
+        return 0
+
+    async def _run_overflow_background(self, adapter, event, text, task_id, anchor):
+        """One owned task covers acknowledgment and generation, including cancellation."""
+        acknowledgment = None
+        try:
+            coroutine = adapter._send_with_retry(
+                chat_id=event.source.chat_id,
+                content="\u26a1 Queue busy, running this in parallel",
+                reply_to=anchor,
+                metadata=self._thread_metadata_for_source(event.source, anchor),
+            )
+            try:
+                acknowledgment = asyncio.create_task(coroutine)
+            except BaseException:
+                coroutine.close()
+                raise
+            # Python 3.10 wait_for can swallow caller cancellation when the
+            # child completes concurrently (CPython #86296). Own the child
+            # explicitly and preserve cancellation at this wait boundary.
+            done, _ = await asyncio.wait(
+                {acknowledgment}, timeout=self._OVR_ACK_TIMEOUT_SECONDS,
+            )
+            if acknowledgment in done:
+                acknowledgment.result()
+            else:
+                acknowledgment.cancel()
+                await asyncio.gather(acknowledgment, return_exceptions=True)
+                logger.debug("Busy-overflow ack timed out")
+        except asyncio.CancelledError:
+            if acknowledgment is not None:
+                acknowledgment.cancel()
+                await asyncio.gather(acknowledgment, return_exceptions=True)
+            raise
+        except Exception:
+            logger.debug("Busy-overflow ack send failed", exc_info=True)
+        await self._run_background_task(
+            text, event.source, task_id, event_message_id=anchor,
+        )
+
+    def _overflow_router_done(self, task):
+        self._overflow_router_tasks.pop(task, None)
+        self._background_tasks.discard(task)
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                logger.warning("Busy-overflow task failed (%s)", type(error).__name__)
+
+    async def _maybe_route_overflow_to_background(self, event, session_key):
+        """Send a self-contained overflow follow-up to its own background run.
+
+        Returns True when the event was dispatched (caller must not queue it).
+        """
+        mode = self._overflow_router_mode()
+        if mode == "off":
+            return False
+        if getattr(event, "internal", False) or event.is_command():
+            return False
+        if getattr(event, "reply_to_message_id", None):
+            return False  # quoted/replied-to context is absent from a cold agent
+        text = (event.text or "").strip()
+        if not text:
+            return False
+        if getattr(event, "media_urls", None):
+            return False  # media belongs with the album-merge path
+        adapter = self._adapter_for_source(event.source)
+        if adapter is None:
+            return False
+        # Only OVERFLOW: something must already be waiting, otherwise this is
+        # the first follow-up and the normal queue handles it fine.
+        #
+        # _queue_depth() counts the pending slot + FIFO overflow but NOT the
+        # adapter's text-debounce buffer, where a busy follow-up sits for
+        # 0.35-1.0s before it is flushed into the slot. Counting only the slot
+        # meant every message arriving inside that window saw depth 0, fell
+        # through, and merged -- observed live: three questions
+        # merged into one turn while a fourth (sent after the flush) routed
+        # correctly. Count the debounce buffer as waiting work.
+        depth = self._queue_depth(session_key, adapter=adapter)
+        _debounce = getattr(adapter, "_text_debounce", None)
+        if isinstance(_debounce, dict) and session_key in _debounce:
+            depth += 1
+        if depth < 1:
+            return False
+        if mode == "independent" and not self._classify_busy_followup(text):
+            return False
+
+        # No await between admission and registration: concurrent handlers on
+        # the gateway event loop cannot oversubscribe a session's capacity.
+        active = getattr(self, "_overflow_router_tasks", None)
+        if active is None:
+            active = self._overflow_router_tasks = {}
+        for finished in tuple(active):
+            if finished.done():
+                active.pop(finished, None)
+        limit = self._overflow_router_limit("busy_overflow_max_per_session", 2, 32)
+        if sum(key == session_key for key in active.values()) >= limit:
+            return False
+        total_limit = self._overflow_router_limit("busy_overflow_max_total", 8, 128)
+        if len(active) >= total_limit:
+            return False
+
+        # Import inside the injected method: installer imports do not exist
+        # in gateway/run.py. Use 128 random bits even at burst throughput.
+        import secrets
+        task_id = "bg_ovr_%d_%s" % (int(time.time()), secrets.token_hex(16))
+        anchor = self._reply_anchor_for_event(event)
+        # Log before the task exists. The busy handler's caller queues the
+        # event when this method raises, and the handler's own except also
+        # logs. A NameError from logger.info after create_task therefore
+        # runs the follow-up in the background and in the foreground queue.
+        logger.info(
+            "Busy-overflow routed to background: session=%s mode=%s task=%s len=%d",
+            session_key, mode, task_id, len(text),
+        )
+        # Once owned by the background registry, the caller returns without
+        # an await. Ack cancellation cannot make an already dispatched event
+        # fall back into the foreground queue and run twice.
+        coroutine = self._run_overflow_background(adapter, event, text, task_id, anchor)
+        try:
+            task = asyncio.create_task(coroutine)
+        except BaseException:
+            coroutine.close()
+            raise
+        # create_task has already scheduled the follow-up. If recording it
+        # raises, the caller queues the same event. Cancel the orphan first
+        # so it cannot also generate.
+        try:
+            self._background_tasks.add(task)
+            active[task] = session_key
+            task.add_done_callback(self._overflow_router_done)
+        except BaseException:
+            active.pop(task, None)
+            self._background_tasks.discard(task)
+            task.cancel()
+            raise
+        return True
+
