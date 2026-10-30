@@ -7,7 +7,7 @@ imported from HERMES_ROOT, which defaults to /opt/hermes:
 
     HERMES_ROOT=/path/to/hermes python3 tests/test_debounce_fifo.py
 """
-import os, sys, asyncio, types
+import os, sys, asyncio
 
 HERMES_ROOT = os.environ.get("HERMES_ROOT", "/opt/hermes")
 sys.path.insert(0, HERMES_ROOT)

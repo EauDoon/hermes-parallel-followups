@@ -12,7 +12,7 @@ from HERMES_ROOT, which defaults to /opt/hermes:
 
     HERMES_ROOT=/path/to/hermes python3 tests/test_burst_fullpath.py
 """
-import os, sys, asyncio, types
+import os, sys, asyncio
 from types import SimpleNamespace
 
 HERMES_ROOT = os.environ.get("HERMES_ROOT", "/opt/hermes")
