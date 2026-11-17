@@ -17,6 +17,7 @@ import argparse
 import hashlib
 from pathlib import Path
 import subprocess
+import stat
 import sys
 import time
 import urllib.error
@@ -58,9 +59,30 @@ def download(name):
 def fetch(directory):
     """Download and verify every fixture file, then write them all."""
     verified = {name: download(name) for name in validate_upstream.SOURCES}
+    if directory.is_symlink():
+        raise SystemExit("Refusing a symlink fixture directory")
     directory.mkdir(parents=True, exist_ok=True)
+    pending = []
+    # Preflight every destination before writing the first file. Re-running a
+    # successful fetch is harmless, but never overwrite a user's different file
+    # or follow a destination symlink (including a broken one).
     for name, raw in verified.items():
-        (directory / name).write_bytes(raw)
+        destination = directory / name
+        try:
+            metadata = destination.lstat()
+        except FileNotFoundError:
+            pending.append((destination, raw))
+            continue
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != len(raw):
+            raise SystemExit(f"Refusing existing fixture destination: {name}; use a new directory")
+        with destination.open("rb") as existing:
+            matches = existing.read(len(raw) + 1) == raw
+        if not matches:
+            raise SystemExit(f"Refusing existing fixture destination: {name}; use a new directory")
+    for destination, raw in pending:
+        # Exclusive creation also refuses a file inserted after the preflight.
+        with destination.open("xb") as output:
+            output.write(raw)
 
 
 def main(argv=None):

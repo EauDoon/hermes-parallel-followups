@@ -93,6 +93,79 @@ class ValidateUpstreamTests(unittest.TestCase):
         lifecycle.assert_not_called()
         self.assertEqual(output.getvalue().strip(), "PINNED_SOURCE_OK " + PIN)
 
+    def test_fetch_reuses_identical_files_without_rewriting_them(self):
+        payloads = {name: b"verified " + name.encode() for name in validate_upstream.SOURCES}
+        with tempfile.TemporaryDirectory() as td, patch.object(fetch_pinned_source, "download", side_effect=lambda name: payloads[name]):
+            directory = Path(td)
+            for name, raw in payloads.items():
+                (directory / name).write_bytes(raw)
+            before = {name: (directory / name).stat().st_mtime_ns for name in payloads}
+            fetch_pinned_source.fetch(directory)
+            self.assertEqual(before, {name: (directory / name).stat().st_mtime_ns for name in payloads})
+
+    def test_fetch_refuses_conflicts_before_writing_any_fixture(self):
+        payloads = {name: b"verified " + name.encode() for name in validate_upstream.SOURCES}
+        for kind in ("different-file", "directory", "symlink", "broken-symlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as td, patch.object(fetch_pinned_source, "download", side_effect=lambda name: payloads[name]):
+                directory = Path(td) / "fixture"
+                directory.mkdir()
+                destination = directory / list(payloads)[-1]
+                outside = Path(td) / "outside"
+                outside.write_bytes(b"preserve me")
+                if kind == "different-file":
+                    destination.write_bytes(b"preserve me")
+                elif kind == "directory":
+                    destination.mkdir()
+                else:
+                    try:
+                        destination.symlink_to(outside if kind == "symlink" else Path(td) / "absent")
+                    except OSError:
+                        continue  # Windows may not permit symlinks for this user.
+                with self.assertRaisesRegex(SystemExit, "Refusing existing fixture"):
+                    fetch_pinned_source.fetch(directory)
+                self.assertEqual(list(directory.iterdir()), [destination])
+                self.assertEqual(outside.read_bytes(), b"preserve me")
+
+    def test_fetch_refuses_oversized_existing_file_without_reading(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(fetch_pinned_source, "download", return_value=b"verified"):
+            directory = Path(td)
+            destination = directory / next(iter(validate_upstream.SOURCES))
+            with destination.open("wb") as output:
+                output.truncate(100_000_000)
+            with patch.object(Path, "open", side_effect=AssertionError("must not read oversized file")):
+                with self.assertRaisesRegex(SystemExit, "Refusing existing fixture"):
+                    fetch_pinned_source.fetch(directory)
+            self.assertEqual(destination.stat().st_size, 100_000_000)
+
+    def test_exclusive_creation_preserves_file_inserted_after_preflight(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(fetch_pinned_source, "download", return_value=b"verified"):
+            directory = Path(td)
+            destination = directory / next(iter(validate_upstream.SOURCES))
+            original_open = Path.open
+            def insert_before_open(path, mode="r", *args, **kwargs):
+                if path == destination and mode == "xb":
+                    with original_open(path, "wb") as concurrent:
+                        concurrent.write(b"other writer")
+                return original_open(path, mode, *args, **kwargs)
+            with patch.object(Path, "open", insert_before_open):
+                with self.assertRaises(FileExistsError):
+                    fetch_pinned_source.fetch(directory)
+            self.assertEqual(destination.read_bytes(), b"other writer")
+            self.assertEqual(list(directory.iterdir()), [destination])
+
+    def test_fetch_refuses_a_symlink_output_directory(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(fetch_pinned_source, "download", return_value=b"verified"):
+            outside = Path(td) / "outside"
+            outside.mkdir()
+            target = Path(td) / "fixture"
+            try:
+                target.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlinks unavailable")
+            with self.assertRaisesRegex(SystemExit, "symlink fixture directory"):
+                fetch_pinned_source.fetch(target)
+            self.assertEqual(list(outside.iterdir()), [])
+
     def test_ci_runs_the_shared_download_script(self):
         # The download used to live in a YAML heredoc that only CI could run
         # and these tests could reach only by string-splitting the workflow.
