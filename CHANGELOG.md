@@ -4,6 +4,10 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ## [Unreleased]
 
+### Security
+
+- The pinned-source fetcher refuses conflicting or non-regular destinations and symlink output directories instead of overwriting or following them. Identical files are reused; missing files are created exclusively after all destination checks.
+
 ### Added
 
 - `--diff` on both installers: runs exactly what `--check` runs, prints the

@@ -134,7 +134,7 @@ python3 tests/fetch_pinned_source.py ./upstream-fixture
 python3 tests/validate_upstream.py ./upstream-fixture
 ```
 
-`python3 tests/fetch_pinned_source.py ./upstream-fixture --validate` does both in one step, as CI does. To use files obtained another way, supply a directory containing the pinned `base.py`, `run.py`, and `authz_mixin.py` directly (without the `gateway/` subdirectories). The validator refuses any file whose hash differs.
+`python3 tests/fetch_pinned_source.py ./upstream-fixture --validate` does both in one step, as CI does. The fetcher reuses byte-identical fixture files without rewriting them and refuses differing files, non-regular destinations, or a symlink output directory. Use a new directory when a destination conflicts. It checks all destinations before creating missing files and uses exclusive creation to avoid overwriting a file inserted during the fetch. Filesystem failures can still leave a partial set of verified files; rerunning completes the set. To use files obtained another way, supply a directory containing the pinned `base.py`, `run.py`, and `authz_mixin.py` directly (without the `gateway/` subdirectories). The validator refuses any file whose hash differs.
 
 Revision [ed2d821021e073425994544dca292d36a12cf4a3](https://github.com/NousResearch/hermes-agent/commit/ed2d821021e073425994544dca292d36a12cf4a3), checked on 09-09-2026, has a different runner structure. The router installer refuses it because the required hook is absent. Compatibility with that revision and newer releases is unsupported. Do not bypass an anchor failure.
 
