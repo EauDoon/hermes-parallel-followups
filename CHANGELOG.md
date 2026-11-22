@@ -44,7 +44,7 @@ All notable changes to the two installers are recorded here. The format follows 
   `off` and `all` are unchanged.
 - The router's injected block changed, so an existing router install reports
   `UPGRADE_APPLICABLE` once and keeps the block it replaces in one `.upgrade`
-  recovery slot. This batches the two acknowledgment fixes below and the
+  recovery slot. This batches the acknowledgment fixes below and the
   classifier change above into a single upgrade.
 - The README compatibility table lists upstream v0.22.5
   (bf0203a794a07aac3ff764972ab9087baa4e4f4e) as known incompatible: the busy
@@ -58,6 +58,9 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Fixed
 
+- The router starts generation when the five-second acknowledgment wait expires,
+  even if the adapter takes longer to process cancellation. The owner retains
+  its capacity slot until generation and acknowledgment cleanup both finish.
 - A router upgrade no longer deletes code it does not own. It replaced
   everything from the injected block marker to the busy-handler anchor, so a
   method between an older router block and `_handle_active_session_busy_message`

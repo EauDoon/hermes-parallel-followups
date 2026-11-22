@@ -1,6 +1,7 @@
 """Offline races and lifecycle checks against the exact injected source."""
 import ast
 import asyncio
+import gc
 import logging
 from pathlib import Path
 import re
@@ -345,36 +346,189 @@ class RouterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.runner._background_tasks)
         self.assertFalse(getattr(self.runner, "_overflow_router_tasks", {}))
 
-    async def test_cancellation_resistant_ack_keeps_ownership_until_it_finishes(self):
-        canceled, release = asyncio.Event(), asyncio.Event()
 
-        async def resistant(**kwargs):
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                canceled.set()
-                await release.wait()
+class AckDeadlineTests(unittest.IsolatedAsyncioTestCase):
+    """Drive the injected router with separate gates for generation and ack cleanup."""
 
-        self.runner.adapter._send_with_retry = resistant
+    def setUp(self):
+        CONFIG.clear()
+        CONFIG["busy_overflow_background"] = "independent"
+        self.runner = Runner()
         self.runner._OVR_ACK_TIMEOUT_SECONDS = 0.01
-        CONFIG["busy_overflow_max_per_session"] = 1
-        self.assertTrue(await self.runner._maybe_route_overflow_to_background(event(), "session"))
-        owner = next(iter(self.runner._background_tasks))
+        self.ack_started = asyncio.Event()
+        self.cleaning_up = asyncio.Event()
+        self.ack_finished = asyncio.Event()
+        self.release_ack = asyncio.Event()
+        self.generating = asyncio.Event()
+        self.generated = asyncio.Event()
+        self.runner.adapter._send_with_retry = self.send
+        self.runner._run_background_task = self.generate
+
+    async def send(self, **kwargs):
+        self.runner.acks.append(kwargs)
+        self.ack_started.set()
         try:
-            await asyncio.wait_for(canceled.wait(), timeout=1.0)
-            self.assertFalse(owner.done())
-            self.assertFalse(self.runner.prompts)
-            self.assertIn(owner, self.runner._overflow_router_tasks)
-            self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+            await self.release_ack.wait()
+        except asyncio.CancelledError:
+            self.cleaning_up.set()
+            await self.release_ack.wait()
         finally:
-            # The deliberately resistant child always gets a bounded cleanup.
-            release.set()
-            self.runner.release.set()
-            await asyncio.wait_for(asyncio.gather(owner, return_exceptions=True), timeout=1.0)
-        owner.result()
+            self.ack_finished.set()
+
+    async def generate(self, *args, **kwargs):
+        self.generating.set()
+        await Runner._run_background_task(self.runner, *args, **kwargs)
+        self.generated.set()
+
+    async def admit(self, session="session", message=None):
+        previous = self.runner._background_tasks.copy()
+        self.assertTrue(await self.runner._maybe_route_overflow_to_background(
+            message or event(), session))
+        owner, = self.runner._background_tasks - previous
+        return owner
+
+    async def wait_for(self, signal):
+        # Event order is the assertion. This outer guard also bounds a failed test.
+        await asyncio.wait_for(signal.wait(), timeout=1.0)
+
+    async def asyncTearDown(self):
+        self.release_ack.set()
+        self.runner.release.set()
+        await asyncio.wait_for(asyncio.gather(
+            *self.runner._background_tasks, return_exceptions=True), timeout=1.0)
+
+    async def test_generation_completes_before_resistant_ack_cleanup(self):
+        self.runner.release.set()
+        owner = await self.admit()
+        await self.wait_for(self.cleaning_up)
+        await self.wait_for(self.generated)
+        self.assertFalse(owner.done())
+        self.assertEqual([prompt for prompt, _ in self.runner.prompts], [event().text])
+        self.release_ack.set()
+        await owner
+        self.assertEqual(len(self.runner.prompts), 1)
+
+    async def test_timely_ack_precedes_generation_and_preserves_reply_context(self):
+        self.runner._OVR_ACK_TIMEOUT_SECONDS = 60
+        await self.admit()
+        await self.wait_for(self.ack_started)
+        self.assertFalse(self.generating.is_set())
+        self.release_ack.set()
+        await self.wait_for(self.generating)
+        self.assertFalse(self.cleaning_up.is_set())
+        ack, = self.runner.acks
+        self.assertEqual((ack["reply_to"], ack["metadata"]), ("msg", {"thread_id": "topic"}))
+
+    async def test_cleanup_retains_and_then_releases_session_slot(self):
+        CONFIG["busy_overflow_max_per_session"] = 1
+        self.runner.release.set()
+        owner = await self.admit()
+        await self.wait_for(self.cleaning_up)
+        self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        self.assertIn(owner, self.runner._overflow_router_tasks)
+        self.release_ack.set()
+        await owner
+        self.assertFalse(self.runner._overflow_router_tasks)
+        await self.admit()
+
+    async def test_cleanup_retains_and_then_releases_global_slot(self):
+        CONFIG["busy_overflow_max_total"] = 1
+        self.runner.release.set()
+        owner = await self.admit()
+        await self.wait_for(self.generated)
+        self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "other"))
+        self.release_ack.set()
+        await owner
+        await self.admit("other")
+
+    async def test_ack_finishing_first_cannot_release_active_generation_slot(self):
+        CONFIG["busy_overflow_max_per_session"] = 1
+        owner = await self.admit()
+        await self.wait_for(self.cleaning_up)
+        self.release_ack.set()
+        await self.wait_for(self.ack_finished)
+        await self.wait_for(self.generating)
+        self.assertFalse(await self.runner._maybe_route_overflow_to_background(event(), "session"))
+        self.runner.release.set()
+        await owner
+        await self.admit()
+
+    async def test_late_ack_exception_does_not_fail_or_repeat_generation(self):
+        loop = asyncio.get_running_loop()
+        unhandled = []
+        self.addCleanup(loop.set_exception_handler, loop.get_exception_handler())
+        loop.set_exception_handler(lambda loop, context: unhandled.append(context["message"]))
+
+        async def failed_cleanup(**kwargs):
+            await self.send(**kwargs)
+            raise OSError("ack cleanup failed")
+
+        self.runner.adapter._send_with_retry = failed_cleanup
+        self.runner.release.set()
+        owner = await self.admit()
+        await self.wait_for(self.generated)
+        self.release_ack.set()
+        await owner
+        gc.collect()
+        self.assertEqual(unhandled, [])
         self.assertEqual(len(self.runner.prompts), 1)
         self.assertFalse(self.runner._background_tasks)
+
+    async def test_generation_failure_survives_late_ack_cleanup(self):
+        async def fail(*args, **kwargs):
+            await self.generate(*args, **kwargs)
+            raise RuntimeError("generation failed")
+
+        self.runner._run_background_task = fail
+        self.runner.release.set()
+        with self.assertLogs(namespace["logger"], level="WARNING") as logs:
+            owner = await self.admit()
+            await self.wait_for(self.generated)
+            self.release_ack.set()
+            with self.assertRaisesRegex(RuntimeError, "generation failed"):
+                await owner
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("RuntimeError", logs.output[0])
+        self.assertEqual(len(self.runner.prompts), 1)
         self.assertFalse(self.runner._overflow_router_tasks)
+
+    async def test_owner_cancelled_before_deadline_never_starts_generation(self):
+        self.runner._OVR_ACK_TIMEOUT_SECONDS = 60
+        owner = await self.admit()
+        await self.wait_for(self.ack_started)
+        owner.cancel()
+        await self.wait_for(self.cleaning_up)
+        self.assertIn(owner, self.runner._overflow_router_tasks)
+        self.release_ack.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await owner
+        self.assertFalse(self.generating.is_set())
+        self.assertFalse(self.runner._overflow_router_tasks)
+
+    async def test_owner_cancelled_during_generation_does_not_complete_or_retry(self):
+        owner = await self.admit()
+        await self.wait_for(self.cleaning_up)
+        await self.wait_for(self.generating)
+        owner.cancel()
+        done, _ = await asyncio.wait({owner}, timeout=1.0)
+        self.assertIn(owner, done)
+        self.assertTrue(owner.cancelled())
+        self.assertTrue(self.ack_finished.is_set())
+        self.assertFalse(self.generated.is_set())
+        self.assertEqual(len(self.runner.prompts), 1)
+        self.assertFalse(self.runner._overflow_router_tasks)
+
+    async def test_another_session_can_finish_while_first_ack_drains(self):
+        self.runner.release.set()
+        first = await self.admit()
+        await self.wait_for(self.cleaning_up)
+        self.runner.adapter._send_with_retry = self.runner.send
+        second = event("What are the principal benefits of wind energy?")
+        second_owner = await self.admit("other", second)
+        await second_owner
+        self.assertFalse(first.done())
+        self.assertCountEqual([prompt for prompt, _ in self.runner.prompts],
+                              [event().text, second.text])
 
 
 def string_constant(name):
