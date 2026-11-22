@@ -62,7 +62,7 @@ The router has its own conservative limits:
 - The acknowledgment and generation share one owned task. After the five-second acknowledgment deadline the owner requests cancellation and starts generation. A slow adapter can still be cleaning up when the answer finishes. The owner retains its capacity slot until both operations finish. A send failure permits generation. Cancelling the owner while it waits for the acknowledgment prevents generation. An acknowledgment that ends cancelled while its owner was not cancelled counts as a send failure. Completed, failed, and canceled tasks release capacity. Failed generation is observed and is not retried.
 - Background work uses the main model, so enabling it can add concurrent provider calls and rate-limit pressure.
 
-The cancellation-resistance regression uses an explicitly releasable synthetic child and bounded test cleanup. It verifies retained ownership, no generation before cleanup, no capacity reuse while the child remains active, and exactly one generation afterward. It does not certify a live adapter implementation.
+The deadline tests hold a synthetic acknowledgment in cleanup after cancellation. They verify that generation can finish exactly once while cleanup is still blocked. They also finish the two operations in either order and check that the router can reuse the slot only after both finish. All callbacks run in process.
 
 These choices make a false queue classification slower, while a false background classification can answer a context-dependent question without the conversation that explains it.
 
