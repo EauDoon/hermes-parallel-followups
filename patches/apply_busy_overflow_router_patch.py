@@ -565,6 +565,7 @@ BLOCK = '''    # ---------------------------------------------------------------
     async def _run_overflow_background(self, adapter, event, text, task_id, anchor):
         """One owned task covers acknowledgment and generation, including cancellation."""
         acknowledgment = None
+        timed_out_ack = None
         try:
             coroutine = adapter._send_with_retry(
                 chat_id=event.source.chat_id,
@@ -597,7 +598,7 @@ BLOCK = '''    # ---------------------------------------------------------------
                     acknowledgment.result()
             else:
                 acknowledgment.cancel()
-                await asyncio.gather(acknowledgment, return_exceptions=True)
+                timed_out_ack = acknowledgment
                 try:
                     logger.debug("Busy-overflow ack timed out")
                 except Exception:
@@ -614,9 +615,19 @@ BLOCK = '''    # ---------------------------------------------------------------
                 logger.debug("Busy-overflow ack send failed", exc_info=True)
             except Exception:
                 pass
-        await self._run_background_task(
-            text, event.source, task_id, event_message_id=anchor,
-        )
+        try:
+            await self._run_background_task(
+                text, event.source, task_id, event_message_id=anchor,
+            )
+        except asyncio.CancelledError:
+            if timed_out_ack is not None:
+                timed_out_ack.cancel()
+            raise
+        finally:
+            # Keep the capacity slot until both operations finish. A slow
+            # adapter can delay slot reuse, but generation has already run.
+            if timed_out_ack is not None:
+                await asyncio.gather(timed_out_ack, return_exceptions=True)
 
     def _overflow_router_done(self, task):
         self._overflow_router_tasks.pop(task, None)
@@ -727,6 +738,7 @@ BLOCK = '''    # ---------------------------------------------------------------
 # history of main, so a release that changes BLOCK fails the suite until the
 # block it replaces is listed here.
 PREVIOUS_BLOCKS = (
+    (22189, "5be1068b74eae98bdc25a2a807e517c8a2aa89f8cbdd73c6fa5074b5a35fcb19", "untagged main build"),
     (21426, "42f2e003b828b2c9c7c95fe9ac4aeea3d69d5c2dc3f12921e36a5664b2d299bf", "untagged main build"),
     (20893, "9adffdfb78d160165d6f83c6282940d1aa269c6c4dee33e6fa598b976089bc55", "untagged main build"),
     (20587, "2c657f6091ea2a30d86b3fbe7a814a187c04964a2c4965a1a3fb8f4806b803bf", "1.0.0"),

@@ -44,7 +44,7 @@ All notable changes to the two installers are recorded here. The format follows 
   `off` and `all` are unchanged.
 - The router's injected block changed, so an existing router install reports
   `UPGRADE_APPLICABLE` once and keeps the block it replaces in one `.upgrade`
-  recovery slot. This batches the two acknowledgment fixes below and the
+  recovery slot. This batches the acknowledgment fixes below and the
   classifier change above into a single upgrade.
 - The README compatibility table lists upstream v0.22.5
   (bf0203a794a07aac3ff764972ab9087baa4e4f4e) as known incompatible: the busy
@@ -58,6 +58,9 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Fixed
 
+- The router starts generation when the five-second acknowledgment wait expires,
+  even if the adapter takes longer to process cancellation. The owner retains
+  its capacity slot until generation and acknowledgment cleanup both finish.
 - A router upgrade no longer deletes code it does not own. It replaced
   everything from the injected block marker to the busy-handler anchor, so a
   method between an older router block and `_handle_active_session_busy_message`
@@ -82,13 +85,13 @@ All notable changes to the two installers are recorded here. The format follows 
   and `--status` print more lines after it.
 - A failed diagnostic log after an acknowledgment error or timeout no longer
   drops an already accepted parallel follow-up. The background run still starts
-  exactly once, and acknowledgment cleanup and capacity limits are unchanged.
+  exactly once.
 - An acknowledgment that ends cancelled when its owning task was not
   cancelled (the adapter's send raised `CancelledError`, or another task
   cancelled it) is now treated as a failed send, so the accepted parallel
   follow-up still runs once. It used to end the owning task as cancelled,
   which dropped the follow-up without a warning. Cancelling the owning task
-  still prevents the run.
+  while it waits for the acknowledgment still prevents the run.
 
 ## [1.0.0] - 2026-10-09
 
