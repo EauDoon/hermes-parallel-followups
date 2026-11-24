@@ -112,6 +112,20 @@ class VersioningTests(unittest.TestCase):
         self.assertEqual(notes.returncode, 0, notes.stderr)
         self.assertEqual(notes.stdout, "### Fixed\n\n- A synthetic fix.\n")
 
+    def test_fenced_examples_are_notes_and_cannot_supply_a_release_link(self):
+        self.set_version("9.8.7")
+        link = "[9.8.7]: https://github.com/EauDoon/hermes-parallel-followups/releases/tag/v9.8.7"
+        for opening, shorter, closing in (("  ````markdown", "```", "   ````"), ("~~~text", "```", "~~~~")):
+            with self.subTest(opening=opening):
+                example = "\n".join((opening, "## [9.8.7] - 1999-01-01", shorter, link, closing, "- Still included."))
+                source = RELEASED.replace("- A synthetic fix.", example)
+                self.write_changelog(source)
+                result = check("--notes", root=self.copy)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(example, result.stdout)
+                self.write_changelog(source.rsplit(link, 1)[0])
+                self.assert_mismatch(check("--tag", "v9.8.7", root=self.copy), "lacks the link reference")
+
     def test_each_disagreement_is_refused(self):
         cases = {
             "installer-drift": (lambda: self.set_version("9.9.9", INSTALLERS[:1]), (),
