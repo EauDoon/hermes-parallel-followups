@@ -10,6 +10,8 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Added
 
+- Release verification and `--notes` preserve fenced examples verbatim. Sample headings or tag links inside backtick or tilde fences cannot create or validate a release.
+
 - `--diff` on both installers: runs exactly what `--check` runs, prints the
   same first line, then the unified diff of the target against the bytes an
   install, upgrade or (with `--reverse`) uninstall would write. It writes

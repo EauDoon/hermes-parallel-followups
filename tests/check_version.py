@@ -67,6 +67,27 @@ def installer_versions(root):
     return versions
 
 
+def changelog_lines(text):
+    """Yield original lines and whether they may declare release metadata.
+
+    A fenced example is release-note content, never a heading or link source.
+    A longer fence may contain a shorter fence of the same character.
+    """
+    fence = None
+    for line in text.splitlines():
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence is not None:
+            yield line, False
+            if (marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence)
+                    and not marker[2].strip(" \t")):
+                fence = None
+        elif marker and (marker[1][0] != "`" or "`" not in marker[2]):
+            fence = marker[1]
+            yield line, False
+        else:
+            yield line, True
+
+
 def changelog_sections(text):
     """{name: (date or None, body lines)} for every '## [name]' heading.
 
@@ -75,8 +96,8 @@ def changelog_sections(text):
     """
     sections = {}
     name = None
-    for line in text.splitlines():
-        if line.startswith("## "):
+    for line, metadata in changelog_lines(text):
+        if metadata and line.startswith("## "):
             heading = line[3:]
             label, closed, rest = heading[1:].partition("]")
             if not heading.startswith("[") or not closed or (rest and not rest.startswith(" - ")):
@@ -85,7 +106,7 @@ def changelog_sections(text):
                 raise Mismatch("CHANGELOG.md has two [%s] sections" % label)
             name = label
             sections[name] = (rest[3:] or None, [])
-        elif line.startswith("[") and "]: " in line:
+        elif metadata and line.startswith("[") and "]: " in line:
             name = None
         elif name is not None:
             sections[name][1].append(line)
@@ -119,7 +140,7 @@ def check(root, tag=None):
         except ValueError:
             raise Mismatch("CHANGELOG.md [%s] date %s is not a valid date" % (version, date)) from None
         link = "[%s]: %s%s" % (version, RELEASES, version)
-        if link not in text.splitlines():
+        if not any(metadata and line == link for line, metadata in changelog_lines(text)):
             raise Mismatch("CHANGELOG.md lacks the link reference %s" % link)
     if tag is not None:
         if prerelease:

@@ -158,6 +158,8 @@ The installers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 Compatibility with Hermes itself is pinned separately; see the compatibility table above. `VERSION` is the single source of the version. Each installer carries a copy as `__version__` so that it stays one standalone file, and `tests/check_version.py` fails the offline suite when the copies, `VERSION`, and `CHANGELOG.md` disagree. A release is an annotated `vX.Y.Z` tag on main. Pushing it runs `.github/workflows/release.yml`, which checks the tag against `VERSION` and the changelog, reruns the offline suite and the pinned-source gate, and then publishes both installers and a `SHA256SUMS` file as a GitHub Release, with the changelog section as the notes.
 
+The next release gate checks headings and tag links outside fenced Markdown examples. `python3 tests/check_version.py --notes` preserves those examples in the selected release notes without treating their contents as release metadata.
+
 To verify downloaded release assets, run `sha256sum -c SHA256SUMS` in the download directory. On Windows, compare the output of `Get-FileHash -Algorithm SHA256 <file>` with the listed value.
 
 A release that changes the router's injected block is an upgrade for every existing router install, and each upgrade uses one of the eight recovery slots described in "Reverse and recover". Classifier changes are therefore batched into releases rather than shipped one at a time.
