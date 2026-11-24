@@ -166,6 +166,16 @@ class VersioningTests(unittest.TestCase):
                 arrange()
                 self.assert_mismatch(check(*arguments, root=self.copy), reason)
 
+    def test_notes_keep_reference_links_and_the_release_instructions_after_them(self):
+        self.set_version("9.8.7")
+        body = "- Follow the [guide].\n\n[guide]: https://example.invalid/guide\n\n- Restart after checking the output."
+        self.write_changelog(RELEASED.replace("- A synthetic fix.", body))
+        result = check("--notes", root=self.copy)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(body, result.stdout)
+        self.assertNotIn("[Unreleased]:", result.stdout)
+        self.assertNotIn("[9.8.7]:", result.stdout)
+
     def test_release_workflow_keeps_its_token_away_from_upstream_code(self):
         workflow = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
         head, jobs = job_blocks(workflow)
