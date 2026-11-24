@@ -96,7 +96,19 @@ def changelog_sections(text):
     """
     sections = {}
     name = None
-    for line, metadata in changelog_lines(text):
+    lines = list(changelog_lines(text))
+    # Only the trailing release-reference footer is outside the section.
+    # An ordinary Markdown reference can precede further release notes.
+    end = len(lines)
+    while end:
+        line, metadata = lines[end - 1]
+        reference = re.fullmatch(r"\[([^\]]+)\]:\s+\S+\s*", line)
+        if metadata and (not line.strip() or (reference and (
+                reference[1] == "Unreleased" or parse_version(reference[1]) is not None))):
+            end -= 1
+        else:
+            break
+    for line, metadata in lines[:end]:
         if metadata and line.startswith("## "):
             heading = line[3:]
             label, closed, rest = heading[1:].partition("]")
@@ -106,8 +118,6 @@ def changelog_sections(text):
                 raise Mismatch("CHANGELOG.md has two [%s] sections" % label)
             name = label
             sections[name] = (rest[3:] or None, [])
-        elif metadata and line.startswith("[") and "]: " in line:
-            name = None
         elif name is not None:
             sections[name][1].append(line)
     return sections
