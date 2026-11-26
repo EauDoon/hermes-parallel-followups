@@ -22,9 +22,10 @@
     .tools { align-items: end; justify-content: space-between; margin: 12px 0; }
     label { display: grid; gap: 4px; color: var(--muted); font-size: .85rem; }
     select, button { color: var(--text); background: var(--panel); border: 1px solid #567068; border-radius: 6px; min-height: 44px; padding: 6px 12px; font: inherit; }
-    button { cursor: pointer; } button:hover, select:hover { border-color: var(--mint); } .camera { display: flex; gap: 6px; }
+    button { cursor: pointer; } button:hover, select:hover { border-color: var(--mint); } .camera { display: flex; gap: 6px; } .camera button { min-width: 44px; }
     .map { border: 1px solid var(--line); border-radius: 12px; background: radial-gradient(ellipse at 56% 35%,#1a2e35 0%,#121d25 56%,#101921 92%); overflow: hidden; }
     .stage { width: 100%; height: auto; display: block; touch-action: pan-y; cursor: grab; }
+    .stage:focus-visible { outline-offset: -3px; }
     .stage:active { cursor: grabbing; }
     .maphead { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; padding: 15px 19px 0; }
     .legend { gap: 16px; padding: 0; margin: 0; list-style: none; color: var(--muted); font: .82rem ui-monospace,monospace; }
@@ -32,15 +33,18 @@
     .pin { color: var(--muted); font: .8rem ui-monospace,monospace; }
     .node { cursor: pointer; } .node text { fill: var(--text); font: 600 16px system-ui,sans-serif; paint-order: stroke; stroke: var(--paper); stroke-width: 5px; stroke-linejoin: round; }
     .edge { stroke: #617c80; stroke-width: 1.6; } .edge.active { stroke: var(--mint); stroke-width: 2.5; }
-    .dim { opacity: .43; } .readout { border-top: 1px solid var(--line); padding: 20px; display: grid; grid-template-columns: 1fr 2fr; gap: 22px; background: var(--panel); }
+    .dim { opacity: .64; } .readout { border-top: 1px solid var(--line); padding: 20px; display: grid; grid-template-columns: 1fr 2fr; align-items: start; gap: 22px; background: var(--panel); }
     .readout h2 { color: var(--mint); } .readout p:last-child { margin: 0; }
     .hint, small, .reference { color: var(--muted); font-size: .88rem; }
-    #case-note { margin: 14px 0 2px; min-height: 1.55em; }
+    .hint { margin-top: 8px; }
+    #case-note { color: var(--muted); max-width: 78ch; margin: 12px 0; }
+    #case-note:empty { display: none; }
     details { margin-top: 19px; border-top: 1px solid var(--line); padding: 14px 0 4px; } summary { cursor: pointer; color: var(--mint); font-weight: 600; }
     .directory { padding-left: 22px; columns: 2; column-gap: 38px; } .directory li { break-inside: avoid; margin: 0 0 18px; }
     .directory p { margin-bottom: 3px; } .directory small { font-family: ui-monospace,monospace; }
     pre { max-height: 26rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); background: var(--panel); padding: 12px; border-radius: 5px; } [hidden] { display: none !important; }
-    @media (max-width: 650px) { main { padding-top: 16px; } .directory { columns: 1; } .readout { grid-template-columns: 1fr; gap: 4px; } .maphead { padding: 12px 10px 0; } .pin { display: none; } .node text { font-size: 14px; } }
+    @media (max-width: 650px) { main { padding-top: 16px; } .directory { columns: 1; } .readout { grid-template-columns: 1fr; gap: 4px; } .maphead { padding: 12px 10px 0; } .pin { display: none; } .node text { font-size: 16px; } nav { padding-bottom: 14px; } h1 { margin-top: 23px; } .intro { font-size: 1rem; margin-bottom: 16px; } }
+    @media (max-width: 365px) { .node text { font-size: 18.5px; } }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto; animation: none; transition: none; } }
   </style>
 </head>
@@ -54,6 +58,7 @@
       <label>Trace a scenario<select id="route"><option value="">All paths</option></select></label>
       <div class="camera" aria-label="Camera controls"><button id="left" type="button" aria-label="Rotate map left">←</button><button id="right" type="button" aria-label="Rotate map right">→</button><button id="reset" type="button">Reset view</button></div>
     </div>
+    <p id="case-note" aria-live="polite"></p>
     <div class="map">
       <div class="maphead"><ul class="legend" aria-label="Lanes"><li style="--lane:var(--blue)">Gateway</li><li style="--lane:var(--mint)">Queue</li><li style="--lane:var(--sand)">Overflow</li></ul><span class="pin">Hermes source · d7b36070</span></div>
       <svg id="stage" class="stage" tabindex="0" role="group" aria-label="3D routing diagram. Left and right arrows rotate, Home resets. Use Inspect a component below for keyboard selection." viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg">
@@ -61,19 +66,18 @@
       </svg>
       <section class="readout"><label>Inspect a component<select id="component"></select></label><div aria-live="polite" aria-atomic="true" id="inspector"></div></section>
     </div>
-    <p id="case-note" aria-live="polite"></p>
     <p class="hint">Drag horizontally or use the arrow buttons to rotate. Select a point to read its source.</p>
   </section>
   <details open id="index"><summary>Component index and connections</summary>
     <ol class="directory" id="catalog">
-        <li id="node-input" data-lane="Gateway" data-xyz="-265 0 -10" data-portrait="-116 -140" data-next="gate"><h3>Busy text</h3><p>The active session receives plain text while queue mode is enabled. The optional router gets a chance to handle it before the adapter buffers the text.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>Leads to Admission</small></li>
-        <li id="node-gate" data-lane="Gateway" data-xyz="-100 0 15" data-portrait="62 -135" data-next="flush,ack"><h3>Admission</h3><p>The optional router checks waiting work, mode, context, and both capacity limits. With routing off or admission declined, ordinary text continues to the adapter.</p><p class="reference"><a href="../patches/apply_busy_overflow_router_patch.py">patches/apply_busy_overflow_router_patch.py</a></p><small>Leads to Debounce or Acknowledgment</small></li>
-        <li id="node-flush" data-lane="Queue" data-xyz="28 -100 -28" data-portrait="-92 -7" data-next="fifo,merge"><h3>Debounce</h3><p>The adapter collects a burst for 0.35 seconds, up to a one-second hard cap, then the patch hands it to the FIFO when the runner and source match.</p><p class="reference"><a href="../patches/apply_debounce_fifo_patch.py">patches/apply_debounce_fifo_patch.py</a></p><small>Leads to FIFO or Pending slot</small></li>
-        <li id="node-fifo" data-lane="Queue" data-xyz="205 -142 -12" data-portrait="87 -44" data-next=""><h3>FIFO</h3><p>Accepted bursts get separate turns in arrival order. A different sender is offered a separate turn to preserve the message boundary.</p><p class="reference"><a href="../tests/test_debounce_flush.py">tests/test_debounce_flush.py</a></p><small>End of this path</small></li>
-        <li id="node-merge" data-lane="Queue" data-xyz="228 -42 28" data-portrait="89 49" data-next=""><h3>Pending slot</h3><p>A same-sender photo caption can merge into the pending event. A same-sender text burst can also use the historical merge when the FIFO refuses it at its cap.</p><p class="reference"><a href="../docs/CASE_STUDY.md">docs/CASE_STUDY.md</a></p><small>End of this path</small></li>
-        <li id="node-ack" data-lane="Overflow" data-xyz="-15 108 29" data-portrait="-90 107" data-next="generation"><h3>Acknowledgment</h3><p>One owned task sends the acknowledgment with a five-second deadline. A failed send or a timeout can still proceed to generation.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>Leads to Generation</small></li>
-        <li id="node-generation" data-lane="Overflow" data-xyz="150 131 -22" data-portrait="76 156" data-next="release"><h3>Generation</h3><p>The accepted prompt runs once. After an acknowledgment timeout, the owner waits for remaining acknowledgment cleanup before it can release the slot.</p><p class="reference"><a href="../patches/apply_busy_overflow_router_patch.py">patches/apply_busy_overflow_router_patch.py</a></p><small>Leads to Slot released</small></li>
-        <li id="node-release" data-lane="Overflow" data-xyz="270 52 7" data-portrait="-48 230" data-next=""><h3>Slot released</h3><p>The completion callback removes the owner from the registries. An acknowledgment that never finishes cleanup can keep the slot occupied.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>End of this path</small></li>
+        <li id="node-input" data-lane="Gateway" data-xyz="-265 0 -10" data-portrait="-100 -105" data-next="gate"><h3>Busy text</h3><p>The active session receives plain text while queue mode is enabled. The optional router gets a chance to handle it before the adapter buffers the text.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>Leads to Admission</small></li>
+        <li id="node-gate" data-lane="Gateway" data-xyz="-100 0 15" data-portrait="2 -65" data-next="flush,ack"><h3>Admission</h3><p>The optional router checks waiting work, mode, context, and both capacity limits. With routing off or admission declined, ordinary text continues to the adapter.</p><p class="reference"><a href="../patches/apply_busy_overflow_router_patch.py">patches/apply_busy_overflow_router_patch.py</a></p><small>Leads to Debounce or Acknowledgment</small></li>
+        <li id="node-flush" data-lane="Queue" data-xyz="28 -100 -28" data-portrait="-88 10" data-next="fifo,merge"><h3>Debounce</h3><p>The adapter collects a burst for 0.35 seconds, up to a one-second hard cap, then the patch hands it to the FIFO when the runner and source match.</p><p class="reference"><a href="../patches/apply_debounce_fifo_patch.py">patches/apply_debounce_fifo_patch.py</a></p><small>Leads to FIFO or Pending slot</small></li>
+        <li id="node-fifo" data-lane="Queue" data-xyz="205 -117 -12" data-portrait="-130 110" data-next=""><h3>FIFO</h3><p>Accepted bursts get separate turns in arrival order. A different sender is offered a separate turn to preserve the message boundary.</p><p class="reference"><a href="../tests/test_debounce_flush.py">tests/test_debounce_flush.py</a></p><small>End of this path</small></li>
+        <li id="node-merge" data-lane="Queue" data-xyz="228 -42 28" data-portrait="-33 168" data-next=""><h3>Pending slot</h3><p>A same-sender photo caption can merge into the pending event. A same-sender text burst can also use the historical merge when the FIFO refuses it at its cap.</p><p class="reference"><a href="../docs/CASE_STUDY.md">docs/CASE_STUDY.md</a></p><small>End of this path</small></li>
+        <li id="node-ack" data-lane="Overflow" data-xyz="-28 88 29" data-portrait="80 55" data-next="generation"><h3>Acknowledgment</h3><p>One owned task sends the acknowledgment with a five-second deadline. A failed send or a timeout can still proceed to generation.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>Leads to Generation</small></li>
+        <li id="node-generation" data-lane="Overflow" data-xyz="165 144 -22" data-portrait="92 130" data-next="release"><h3>Generation</h3><p>The accepted prompt runs once. After an acknowledgment timeout, the owner waits for remaining acknowledgment cleanup before it can release the slot.</p><p class="reference"><a href="../patches/apply_busy_overflow_router_patch.py">patches/apply_busy_overflow_router_patch.py</a></p><small>Leads to Slot released</small></li>
+        <li id="node-release" data-lane="Overflow" data-xyz="270 52 7" data-portrait="72 231" data-next=""><h3>Slot released</h3><p>The completion callback removes the owner from the registries. An acknowledgment that never finishes cleanup can keep the slot occupied.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>End of this path</small></li>
     </ol>
   </details>
   <details open id="scenario-index"><summary>Worked routing scenarios</summary>
@@ -119,7 +123,7 @@ for (const route of cases) $("route").add(new Option(route.name, route.id));
 for (const node of nodes) {
   $("component").add(new Option(node.name, node.id));
   const group = svg("g", {class: "node"});
-  group.append(svg("circle", {r: 21, fill: "transparent"}));
+  group.append(svg("circle", {r: 29, fill: "transparent"}));
   const ring = svg("circle", {r: 12, fill: "none", stroke: colors[node.lane], "stroke-width": 2});
   const dot = svg("circle", {r: 6, fill: colors[node.lane]});
   const label = svg("text", {y: -17, "text-anchor": "middle"});
