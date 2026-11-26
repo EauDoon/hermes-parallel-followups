@@ -2,6 +2,22 @@
 
 Two drop-in patches for [Nous Research Hermes](https://github.com/NousResearch/hermes-agent) that keep busy-session follow-ups separate and can run safe, self-contained questions in parallel.
 
+## Inspect the routing map
+
+Open [the routing map](docs/architecture.html) from a local checkout in a browser. The component index links to source and tests, and the four worked scenarios follow admitted overflow, first-follow-up queueing, caption fallback, and a slow acknowledgment. Use the scenario selector, component picker, or the arrow buttons. The component index and scenarios also work with JavaScript disabled. The graph data panel shows a fixed, browser-local query and response.
+
+## Inspect both patch targets
+
+From this checkout, give the inspection command a Hermes source directory containing `gateway/`. It runs both standalone installers in read-only modes and reports each result, even if the first target refuses inspection.
+
+```bash
+python3 tools/inspect_gateway.py /path/to/hermes
+python3 tools/inspect_gateway.py /path/to/hermes --mode install-check
+python3 tools/inspect_gateway.py /path/to/hermes --mode reverse-check --json
+```
+
+The default `status` mode reports the layout, source verdict, and recovery slots. A successful status inspection can describe an unsupported layout. Choose `install-check` or `reverse-check` to check the corresponding preconditions. JSON schema version 1 includes both relative target paths, their first result line, subsequent detail lines and individual exit codes. The command returns the highest installer exit code for ordinary completions. All three modes leave the targets untouched.
+
 ## The problem
 
 With `display.busy_input_mode: queue`, the gateway returns `False` for plain text received during an active turn. The adapter then flushes follow-ups into one pending slot and newline-joins them:
@@ -67,7 +83,7 @@ sha256sum -c SHA256SUMS
 python3 apply_debounce_fifo_patch.py --version
 ```
 
-The commands below use the `patches/` paths of a checkout; run downloaded scripts from their own directory instead.
+The v1.0.0 assets support `--check`, `--reverse`, and `--version`. The `--status`, `--diff`, and paired inspection examples in this guide require the current source checkout. Its installers still report 1.0.0 until the next tagged release. For commands supported by the downloaded scripts, omit the checkout’s `patches/` prefix.
 
 Inspect the exact target before creating a backup:
 

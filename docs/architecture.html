@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Hermes follow-up routing map</title>
+  <style>
+    :root { color-scheme: dark; --paper: #101821; --panel: #15212a; --line: #364850; --text: #eef3ed; --muted: #b4c4c3; --mint: #78e6be; --sand: #efbb76; --blue: #9acdff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--text); font: 1rem/1.55 system-ui,sans-serif; }
+    main { width: min(1180px, 100%); margin: auto; padding: 26px clamp(16px, 4vw, 52px) 72px; }
+    a { color: var(--mint); text-underline-offset: .2em; overflow-wrap: anywhere; }
+    :focus-visible { outline: 3px solid var(--sand); outline-offset: 3px; }
+    nav, .tools, .legend { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    nav { justify-content: space-between; padding-bottom: 23px; border-bottom: 1px solid var(--line); }
+    nav a { text-decoration: none; font: 600 .85rem ui-monospace,monospace; }
+    h1 { font-size: clamp(2.4rem, 6vw, 4.8rem); line-height: 1.02; letter-spacing: -.065em; margin: 32px 0 12px; }
+    .intro { color: var(--muted); max-width: 64ch; font-size: 1.1rem; margin: 0 0 26px; }
+    h2, h3, p { margin: 0 0 10px; }
+    h2 { font-size: 1.4rem; } h3 { font-size: 1rem; }
+    .tools { align-items: end; justify-content: space-between; margin: 12px 0; }
+    label { display: grid; gap: 4px; color: var(--muted); font-size: .85rem; }
+    select, button { color: var(--text); background: var(--panel); border: 1px solid #567068; border-radius: 6px; min-height: 44px; padding: 6px 12px; font: inherit; }
+    button { cursor: pointer; } button:hover, select:hover { border-color: var(--mint); } .camera { display: flex; gap: 6px; }
+    .map { border: 1px solid var(--line); border-radius: 12px; background: radial-gradient(ellipse at 56% 35%,#1a2e35 0%,#121d25 56%,#101921 92%); overflow: hidden; }
+    .stage { width: 100%; height: auto; display: block; touch-action: pan-y; cursor: grab; }
+    .stage:active { cursor: grabbing; }
+    .maphead { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; padding: 15px 19px 0; }
+    .legend { gap: 16px; padding: 0; margin: 0; list-style: none; color: var(--muted); font: .82rem ui-monospace,monospace; }
+    .legend li::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--lane); }
+    .pin { color: var(--muted); font: .8rem ui-monospace,monospace; }
+    .node { cursor: pointer; } .node text { fill: var(--text); font: 600 16px system-ui,sans-serif; paint-order: stroke; stroke: var(--paper); stroke-width: 5px; stroke-linejoin: round; }
+    .edge { stroke: #617c80; stroke-width: 1.6; } .edge.active { stroke: var(--mint); stroke-width: 2.5; }
+    .dim { opacity: .43; } .readout { border-top: 1px solid var(--line); padding: 20px; display: grid; grid-template-columns: 1fr 2fr; gap: 22px; background: var(--panel); }
+    .readout h2 { color: var(--mint); } .readout p:last-child { margin: 0; }
+    .hint, small, .reference { color: var(--muted); font-size: .88rem; }
+    #case-note { margin: 14px 0 2px; min-height: 1.55em; }
+    details { margin-top: 19px; border-top: 1px solid var(--line); padding: 14px 0 4px; } summary { cursor: pointer; color: var(--mint); font-weight: 600; }
+    .directory { padding-left: 22px; columns: 2; column-gap: 38px; } .directory li { break-inside: avoid; margin: 0 0 18px; }
+    .directory p { margin-bottom: 3px; } .directory small { font-family: ui-monospace,monospace; }
+    pre { max-height: 26rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); background: var(--panel); padding: 12px; border-radius: 5px; } [hidden] { display: none !important; }
+    @media (max-width: 650px) { main { padding-top: 16px; } .directory { columns: 1; } .readout { grid-template-columns: 1fr; gap: 4px; } .maphead { padding: 12px 10px 0; } .pin { display: none; } .node text { font-size: 14px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto; animation: none; transition: none; } }
+  </style>
+</head>
+<body>
+<main>
+  <nav aria-label="Project"><a href="https://github.com/EauDoon/hermes-parallel-followups">EauDoon / Hermes</a><a href="../README.md">Operator guide ↗</a></nav>
+  <h1>Follow-up routing map</h1>
+  <p class="intro">Follow a message through the busy gateway. Trace where it waits, when it can run in parallel, and which operation gives capacity back.</p>
+  <section id="interactive" aria-label="Interactive routing map" hidden>
+    <div class="tools">
+      <label>Trace a scenario<select id="route"><option value="">All paths</option></select></label>
+      <div class="camera" aria-label="Camera controls"><button id="left" type="button" aria-label="Rotate map left">←</button><button id="right" type="button" aria-label="Rotate map right">→</button><button id="reset" type="button">Reset view</button></div>
+    </div>
+    <div class="map">
+      <div class="maphead"><ul class="legend" aria-label="Lanes"><li style="--lane:var(--blue)">Gateway</li><li style="--lane:var(--mint)">Queue</li><li style="--lane:var(--sand)">Overflow</li></ul><span class="pin">Hermes source · d7b36070</span></div>
+      <svg id="stage" class="stage" tabindex="0" role="group" aria-label="3D routing diagram. Left and right arrows rotate, Home resets. Use Inspect a component below for keyboard selection." viewBox="0 0 760 370" xmlns="http://www.w3.org/2000/svg">
+        <defs><pattern id="grid" width="26" height="26" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#4d706a" opacity=".5"/></pattern></defs><rect width="100%" height="100%" fill="url(#grid)"/><g id="edges" aria-hidden="true"></g><g id="points" aria-hidden="true"></g>
+      </svg>
+      <section class="readout"><label>Inspect a component<select id="component"></select></label><div aria-live="polite" aria-atomic="true" id="inspector"></div></section>
+    </div>
+    <p id="case-note" aria-live="polite"></p>
+    <p class="hint">Drag horizontally or use the arrow buttons to rotate. Select a point to read its source.</p>
+  </section>
+  <details open id="index"><summary>Component index and connections</summary>
+    <ol class="directory" id="catalog">
+        <li id="node-input" data-lane="Gateway" data-xyz="-265 0 -10" data-portrait="-116 -140" data-next="gate"><h3>Busy text</h3><p>The active session receives plain text while queue mode is enabled. The optional router gets a chance to handle it before the adapter buffers the text.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>Leads to Admission</small></li>
+        <li id="node-gate" data-lane="Gateway" data-xyz="-100 0 15" data-portrait="62 -135" data-next="flush,ack"><h3>Admission</h3><p>The optional router checks waiting work, mode, context, and both capacity limits. With routing off or admission declined, ordinary text continues to the adapter.</p><p class="reference"><a href="../patches/apply_busy_overflow_router_patch.py">patches/apply_busy_overflow_router_patch.py</a></p><small>Leads to Debounce or Acknowledgment</small></li>
+        <li id="node-flush" data-lane="Queue" data-xyz="28 -100 -28" data-portrait="-92 -7" data-next="fifo,merge"><h3>Debounce</h3><p>The adapter collects a burst for 0.35 seconds, up to a one-second hard cap, then the patch hands it to the FIFO when the runner and source match.</p><p class="reference"><a href="../patches/apply_debounce_fifo_patch.py">patches/apply_debounce_fifo_patch.py</a></p><small>Leads to FIFO or Pending slot</small></li>
+        <li id="node-fifo" data-lane="Queue" data-xyz="205 -142 -12" data-portrait="87 -44" data-next=""><h3>FIFO</h3><p>Accepted bursts get separate turns in arrival order. A different sender is offered a separate turn to preserve the message boundary.</p><p class="reference"><a href="../tests/test_debounce_flush.py">tests/test_debounce_flush.py</a></p><small>End of this path</small></li>
+        <li id="node-merge" data-lane="Queue" data-xyz="228 -42 28" data-portrait="89 49" data-next=""><h3>Pending slot</h3><p>A same-sender photo caption can merge into the pending event. A same-sender text burst can also use the historical merge when the FIFO refuses it at its cap.</p><p class="reference"><a href="../docs/CASE_STUDY.md">docs/CASE_STUDY.md</a></p><small>End of this path</small></li>
+        <li id="node-ack" data-lane="Overflow" data-xyz="-15 108 29" data-portrait="-90 107" data-next="generation"><h3>Acknowledgment</h3><p>One owned task sends the acknowledgment with a five-second deadline. A failed send or a timeout can still proceed to generation.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>Leads to Generation</small></li>
+        <li id="node-generation" data-lane="Overflow" data-xyz="150 131 -22" data-portrait="76 156" data-next="release"><h3>Generation</h3><p>The accepted prompt runs once. After an acknowledgment timeout, the owner waits for remaining acknowledgment cleanup before it can release the slot.</p><p class="reference"><a href="../patches/apply_busy_overflow_router_patch.py">patches/apply_busy_overflow_router_patch.py</a></p><small>Leads to Slot released</small></li>
+        <li id="node-release" data-lane="Overflow" data-xyz="270 52 7" data-portrait="-48 230" data-next=""><h3>Slot released</h3><p>The completion callback removes the owner from the registries. An acknowledgment that never finishes cleanup can keep the slot occupied.</p><p class="reference"><a href="../tests/test_router_lifecycle.py">tests/test_router_lifecycle.py</a></p><small>End of this path</small></li>
+    </ol>
+  </details>
+  <details open id="scenario-index"><summary>Worked routing scenarios</summary>
+    <ol class="directory" id="cases">
+        <li id="case-first" data-path="input gate flush fifo"><h3>First follow-up</h3><p>With both patches present, nothing is waiting yet. The router declines, the adapter flushes the burst, and an available FIFO accepts it.</p><small>Busy text → Admission → Debounce → FIFO</small></li>
+        <li id="case-parallel" data-path="input gate ack generation release"><h3>Independent overflow</h3><p>A self-contained question arrives behind waiting work. In independent mode with capacity available, a timely acknowledgment precedes generation and slot release.</p><small>Busy text → Admission → Acknowledgment → Generation → Slot released</small></li>
+        <li id="case-caption" data-path="input gate flush merge"><h3>Caption fallback</h3><p>With routing off, same-sender busy text joins a pending photo as a caption when the adapter flushes it.</p><small>Busy text → Admission → Debounce → Pending slot</small></li>
+        <li id="case-deadline" data-path="input gate ack generation release"><h3>Slow acknowledgment</h3><p>For an admitted prompt, the owner requests cancellation after five seconds and starts generation. The slot returns only when both generation and acknowledgment cleanup finish.</p><small>Busy text → Admission → Acknowledgment → Generation → Slot released</small></li>
+    </ol>
+  </details>
+  <details id="data" hidden><summary>Read the graph data</summary>
+    <p>Local projection of the component index and its directed connections.</p>
+    <pre>query RoutingMap { architecture { nodes { id name lane source } edges { from to } } }</pre>
+    <pre id="response" tabindex="0" aria-label="Graph response"></pre>
+  </details>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const svg = (tag, attrs) => {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
+  return element;
+};
+const nodes = Array.from($("catalog").children, entry => ({
+  id: entry.id.slice(5), name: entry.querySelector("h3").textContent,
+  lane: entry.dataset.lane, source: entry.querySelector("a").textContent,
+  description: entry.querySelector("p").textContent, link: entry.querySelector("a"),
+  xyz: entry.dataset.xyz.split(" ").map(Number), portrait: entry.dataset.portrait.split(" ").map(Number),
+  next: entry.dataset.next.split(",").filter(Boolean)
+}));
+const cases = Array.from($("cases").children, entry => ({
+  id: entry.id.slice(5), name: entry.querySelector("h3").textContent,
+  path: entry.dataset.path.split(" "), note: entry.querySelector("p").textContent
+}));
+const byId = new Map(nodes.map(n => [n.id, n]));
+const edges = nodes.flatMap(n => n.next.map(to => ({from: n.id, to})));
+const colors = {Gateway: "#9acdff", Queue: "#78e6be", Overflow: "#efbb76"};
+const narrow = matchMedia("(max-width: 650px)");
+let yaw = 0, active = nodes[0].id, trace = null;
+const visuals = new Map();
+for (const route of cases) $("route").add(new Option(route.name, route.id));
+for (const node of nodes) {
+  $("component").add(new Option(node.name, node.id));
+  const group = svg("g", {class: "node"});
+  group.append(svg("circle", {r: 21, fill: "transparent"}));
+  const ring = svg("circle", {r: 12, fill: "none", stroke: colors[node.lane], "stroke-width": 2});
+  const dot = svg("circle", {r: 6, fill: colors[node.lane]});
+  const label = svg("text", {y: -17, "text-anchor": "middle"});
+  label.textContent = node.name;
+  group.append(ring, dot, label);
+  $("points").append(group);
+  visuals.set(node.id, {group, ring});
+}
+const lines = edges.map(() => {
+  const path = svg("path", {class: "edge", fill: "none"});
+  $("edges").append(path);
+  return path;
+});
+
+function draw() {
+  const mobile = narrow.matches;
+  const [cx, cy] = mobile ? [185, 175] : [380, 184];
+  $("stage").setAttribute("viewBox", mobile ? "0 0 370 455" : "0 0 760 370");
+  const screen = new Map();
+  for (const node of nodes) {
+    const [x, y] = mobile ? node.portrait : node.xyz;
+    const z = node.xyz[2];
+    const depth = z * Math.cos(yaw) - x * Math.sin(yaw);
+    const scale = 780 / (780 - depth);
+    const px = cx + (x * Math.cos(yaw) + z * Math.sin(yaw)) * scale;
+    const py = cy + y * scale;
+    screen.set(node.id, {x: px, y: py, depth});
+    const {group, ring} = visuals.get(node.id);
+    group.setAttribute("transform", "translate(" + px + " " + py + ")");
+    group.classList.toggle("dim", !!trace && !trace.path.includes(node.id) && node.id !== active);
+    ring.setAttribute("opacity", node.id === active ? 1 : 0.28);
+    ring.setAttribute("r", node.id === active ? 13 : 9);
+  }
+  nodes.slice().sort((a, b) => screen.get(a.id).depth - screen.get(b.id).depth)
+    .forEach(n => $("points").append(visuals.get(n.id).group));
+  edges.forEach(({from, to}, i) => {
+    const a = screen.get(from), b = screen.get(to);
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    const dx = (b.x - a.x) / length, dy = (b.y - a.y) / length;
+    const x = b.x - dx * 14, y = b.y - dy * 14;
+    lines[i].setAttribute("d", "M " + (a.x + dx * 12) + " " + (a.y + dy * 12)
+      + " L " + x + " " + y + " m " + (-dx * 6 - dy * 3) + " " + (-dy * 6 + dx * 3)
+      + " L " + x + " " + y + " l " + (-dx * 6 + dy * 3) + " " + (-dy * 6 - dx * 3));
+    const index = trace ? trace.path.indexOf(from) : -1;
+    const inRoute = !!trace && index >= 0 && trace.path[index + 1] === to;
+    lines[i].classList.toggle("active", inRoute);
+    lines[i].classList.toggle("dim", !!trace && !inRoute);
+  });
+}
+function selectNode(id) {
+  const n = byId.get(id);
+  active = id;
+  $("component").value = id;
+  const title = document.createElement("h2");
+  title.textContent = n.name;
+  const description = document.createElement("p");
+  description.textContent = n.description;
+  $("inspector").replaceChildren(title, description, n.link.cloneNode(true));
+  draw();
+}
+function rotate(amount) { yaw = Math.max(-0.6, Math.min(0.6, yaw + amount)); draw(); }
+$("left").onclick = () => rotate(-0.15);
+$("right").onclick = () => rotate(0.15);
+$("reset").onclick = () => { yaw = 0; draw(); };
+$("component").onchange = e => selectNode(e.target.value);
+$("route").onchange = e => {
+  trace = cases.find(c => c.id === e.target.value);
+  $("case-note").textContent = trace ? trace.note : "";
+  selectNode(trace ? trace.path[0] : active);
+};
+$("stage").onkeydown = e => {
+  if (!["ArrowLeft", "ArrowRight", "Home"].includes(e.key)) return;
+  e.preventDefault();
+  if (e.key === "Home") { yaw = 0; draw(); }
+  else rotate(e.key === "ArrowLeft" ? -0.15 : 0.15);
+};
+let drag = null;
+const stage = $("stage");
+stage.onpointerdown = e => {
+  if (!e.isPrimary || e.button !== 0) return;
+  const hit = nodes.find(n => visuals.get(n.id).group.contains(e.target));
+  drag = {id: e.pointerId, start: e.clientX, last: e.clientX, moved: false, hit};
+  stage.setPointerCapture(e.pointerId);
+};
+stage.onpointermove = e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (Math.abs(e.clientX - drag.start) > 5) drag.moved = true;
+  if (drag.moved) rotate((e.clientX - drag.last) / 200);
+  drag.last = e.clientX;
+};
+stage.onpointerup = e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (!drag.moved && drag.hit) selectNode(drag.hit.id);
+  drag = null;
+};
+stage.onlostpointercapture = stage.onpointercancel = () => { drag = null; };
+narrow.addEventListener("change", draw);
+$("response").textContent = JSON.stringify({data: {architecture: {
+  nodes: nodes.map(({id, name, lane, source}) => ({id, name, lane, source})), edges
+}}}, null, 2);
+selectNode(active);
+$("data").hidden = $("interactive").hidden = false;
+$("index").open = $("scenario-index").open = false;
+</script>
+</body>
+</html>
