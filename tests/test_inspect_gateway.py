@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the public read-only inspection command with independent targets."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -56,6 +57,19 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual(second["result"], "APPLICABLE")
         self.assertFalse(self.base.exists())
 
+
+    def test_text_report_survives_a_console_that_cannot_encode_the_path(self):
+        # The checkout path holds a non-ASCII character and the installer's
+        # ABORT detail repeats it. On an ASCII or cp1252 console the text
+        # report raised UnicodeEncodeError and exited 1 with a traceback.
+        self.base.unlink()
+        result = subprocess.run([sys.executable, str(ROOT / "tools" / "inspect_gateway.py"),
+                                 str(self.root)], capture_output=True, check=False,
+                                env={**os.environ, "PYTHONIOENCODING": "ascii"})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stderr, b"")
+        self.assertIn(b"ABORT: target cannot be inspected", result.stdout)
+        self.assertIn(b"[router] gateway/run.py (exit 0)", result.stdout)
 
 if __name__ == "__main__":
     unittest.main()

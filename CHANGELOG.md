@@ -37,6 +37,8 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Changed
 
+- The README opens with who needs the patches and a three-step install that
+  checks both targets before anything is written.
 - In `independent` mode the router now runs two self-contained question
   shapes in parallel that it used to queue: an ordinal before a calendar or
   legal noun (`the 18th century`, `the 14th amendment`, `the 16th president`,
@@ -60,6 +62,19 @@ All notable changes to the two installers are recorded here. The format follows 
 
 ### Fixed
 
+- Both installers and `tools/inspect_gateway.py` no longer end in a traceback
+  with exit code 1 when the console encoding cannot represent a character in
+  the target path, for example a non-Latin directory name on a cp1252 or
+  ASCII console. The `ABORT` detail line and the `--status` copy lines name
+  the path, so the print raised `UnicodeEncodeError` before the documented
+  exit code was returned. Such characters are now written as backslash
+  escapes and the result line and exit code are unchanged.
+- `python3 tests/run_offline.py` no longer fails when run as root, which is
+  the usual user inside a Hermes container. The check that `--check` refuses
+  an unwritable directory needs a directory the user cannot write to, and
+  root can write to a 0555 directory. The check is now skipped with that
+  reason when the directory stays writable, and still runs for every other
+  user.
 - The router starts generation when the five-second acknowledgment wait expires,
   even if the adapter takes longer to process cancellation. The owner retains
   its capacity slot until generation and acknowledgment cleanup both finish.

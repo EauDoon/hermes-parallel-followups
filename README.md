@@ -2,6 +2,43 @@
 
 Two drop-in patches for [Nous Research Hermes](https://github.com/NousResearch/hermes-agent) that keep busy-session follow-ups separate and can run safe, self-contained questions in parallel.
 
+## Who needs this
+
+You run a Hermes gateway from a source checkout, you set `display.busy_input_mode: queue`, and people send several messages while the agent is still answering. Unpatched, those follow-ups are joined into one turn, so the model answers three questions as one block. With the first patch each follow-up gets its own turn in arrival order. The second patch is optional and off by default: it can answer a self-contained follow-up in a background task while the queue drains.
+
+The patches are verified against one Hermes revision, `d7b36070`. The installers refuse any layout they do not recognize and change nothing, so the check in step 1 is safe on any checkout. Hermes v0.22.5 is known to be refused. See [Compatibility before installation](#compatibility-before-installation).
+
+## Install in three steps
+
+You need Python 3.10 or newer and no other dependency. Replace `/path/to/hermes` with the Hermes source directory that contains `gateway/`.
+
+1. Get the installers and check both targets. This step writes nothing.
+
+   ```bash
+   git clone https://github.com/EauDoon/hermes-parallel-followups.git
+   cd hermes-parallel-followups
+   python3 tools/inspect_gateway.py /path/to/hermes --mode install-check
+   ```
+
+   Continue only when both targets print `APPLICABLE` and the command exits 0.
+
+2. Stop the gateway, then apply. Each installer prints `PATCHED_OK` and keeps a backup beside the file it changed.
+
+   ```bash
+   python3 patches/apply_debounce_fifo_patch.py /path/to/hermes/gateway/platforms/base.py
+   python3 patches/apply_busy_overflow_router_patch.py /path/to/hermes/gateway/run.py
+   ```
+
+   The second command is needed only for background routing, which also needs the `display.busy_overflow_background` key described under [The fix](#the-fix).
+
+3. Restart the gateway and confirm that both targets report `STATUS CURRENT`.
+
+   ```bash
+   python3 tools/inspect_gateway.py /path/to/hermes
+   ```
+
+To uninstall, run the same installer with `--reverse` and restart the gateway. [Quick start](#quick-start) covers release downloads, `--diff` previews and every result token. [Reverse and recover](#reverse-and-recover) covers the backups.
+
 ## Inspect the routing map
 
 Open [the routing map](docs/architecture.html) from a local checkout in a browser. The component index links to source and tests, and the four worked scenarios follow admitted overflow, first-follow-up queueing, caption fallback, and a slow acknowledgment. Use the scenario selector, component picker, or the arrow buttons. The component index and scenarios also work with JavaScript disabled. The graph data panel shows a fixed, browser-local query and response.
