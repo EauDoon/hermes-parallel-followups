@@ -1,3 +1,5 @@
+<p align="center"><img src=".github/assets/banner.svg" alt="hermes-parallel-followups. Two drop-in patches for the Nous Research Hermes gateway: follow-up messages sent to a busy session stay separate, and safe, self-contained follow-ups can run in parallel. Shown as one long busy turn on its own lane while separate follow-ups run beside it on two more lanes." width="100%"></p>
+
 # hermes-parallel-followups
 
 Two drop-in patches for [Nous Research Hermes](https://github.com/NousResearch/hermes-agent) that keep busy-session follow-ups separate and can run safe, self-contained questions in parallel.
