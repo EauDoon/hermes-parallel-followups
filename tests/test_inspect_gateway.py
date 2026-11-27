@@ -71,5 +71,21 @@ class InspectionTests(unittest.TestCase):
         self.assertIn(b"ABORT: target cannot be inspected", result.stdout)
         self.assertIn(b"[router] gateway/run.py (exit 0)", result.stdout)
 
+    def test_readme_confirmation_matches_a_debounce_only_install(self):
+        # README step 2 calls the router installer optional, so step 3 must
+        # describe what the documented minimal path really prints.
+        applied = subprocess.run([sys.executable, str(ROOT / "patches" / "apply_debounce_fifo_patch.py"),
+                                  str(self.base)], capture_output=True, text=True, check=False)
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        result = self.inspect("--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        states = {t["patch"]: t["result"] for t in json.loads(result.stdout)["targets"]}
+        self.assertEqual(states, {"debounce": "STATUS CURRENT", "router": "STATUS UNPATCHED"})
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        step = next(line for line in readme.splitlines() if line.startswith("3. Restart the gateway"))
+        self.assertNotIn("both targets report `STATUS CURRENT`", step)
+        self.assertIn("`STATUS UNPATCHED`", step)
+
+
 if __name__ == "__main__":
     unittest.main()

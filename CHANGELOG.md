@@ -38,7 +38,8 @@ All notable changes to the two installers are recorded here. The format follows 
 ### Changed
 
 - The README opens with who needs the patches and a three-step install that
-  checks both targets before anything is written.
+  checks both targets before anything is written. Step 3 says what the
+  status check prints when only the first patch is installed.
 - In `independent` mode the router now runs two self-contained question
   shapes in parallel that it used to queue: an ordinal before a calendar or
   legal noun (`the 18th century`, `the 14th amendment`, `the 16th president`,

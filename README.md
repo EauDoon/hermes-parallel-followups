@@ -33,7 +33,7 @@ You need Python 3.10 or newer and no other dependency. Replace `/path/to/hermes`
 
    The second command is needed only for background routing, which also needs the `display.busy_overflow_background` key described under [The fix](#the-fix).
 
-3. Restart the gateway and confirm that both targets report `STATUS CURRENT`.
+3. Restart the gateway and confirm that each target you patched reports `STATUS CURRENT`. The router target reports `STATUS UNPATCHED` if you skipped the second command.
 
    ```bash
    python3 tools/inspect_gateway.py /path/to/hermes
