@@ -82,6 +82,12 @@ if args.status and (args.check or args.reverse or args.diff):
 if args.diff:
     args.check = True
 PATH = args.path
+# A console code page that cannot encode a character in the path, in an OS
+# error message or in a recovery copy name writes it as an escape. Without
+# this, print raised UnicodeEncodeError: a traceback and exit code 1 in place
+# of the result line and its documented exit code.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="backslashreplace")
 
 
 def checked_read(path, expected=None):

@@ -666,6 +666,10 @@ class PatchInstallerTests(unittest.TestCase):
                 original = target.read_bytes()
                 os.chmod(directory, 0o555)
                 try:
+                    if os.access(directory, os.W_OK):
+                        # root, or a filesystem that ignores modes: the
+                        # unwritable directory this test needs cannot exist.
+                        self.skipTest("this user can write to a 0555 directory")
                     result = self.run_installer(script, target, directory, "--check")
                     applied = self.run_installer(script, target, directory)
                 finally:
