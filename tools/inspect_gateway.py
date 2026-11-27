@@ -27,6 +27,10 @@ def main():
                         help="read layout (default) or check a proposed operation")
     parser.add_argument("--json", action="store_true", help="emit a report for automation")
     args = parser.parse_args()
+    # The installers name the target path in their output. A console code
+    # page that cannot encode it gets escapes, not a traceback and exit 1.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
     results = []
     for name, relative, script in TARGETS:
         target = args.root.absolute() / relative

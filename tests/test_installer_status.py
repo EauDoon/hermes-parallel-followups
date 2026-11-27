@@ -243,6 +243,32 @@ class StatusTests(unittest.TestCase):
                 self.assertEqual((binary.returncode, binary.stdout.strip()),
                                  (2, "ABORT: target must be readable UTF-8"))
 
+    def test_a_console_that_cannot_encode_the_path_still_gets_the_result(self):
+        # A cp1252 or ASCII console cannot encode every character a path can
+        # hold. The ABORT detail line and the copy lines name the path, so
+        # the print raised UnicodeEncodeError: a traceback and exit code 1
+        # in place of the documented result line and exit code.
+        narrow = {**os.environ, "PYTHONIOENCODING": "ascii"}
+        for script in (ROUTER, DEBOUNCE):
+            with self.subTest(script=script.name):
+                directory = self.fresh() / "h\u00fc \u6f22"
+                directory.mkdir()
+                missing = subprocess.run(
+                    [sys.executable, str(script), str(directory / "absent.py"), "--status"],
+                    check=False, capture_output=True, env=narrow)
+                self.assertEqual(missing.returncode, 2, missing.stderr)
+                self.assertTrue(missing.stdout.startswith(b"ABORT: target cannot be inspected"))
+                self.assertIn(b"\\xfc", missing.stdout)
+                self.assertEqual(missing.stderr, b"")
+                target = directory / "t\u00fc.py"
+                target.write_bytes(unpatched(script).encode("utf-8"))
+                for options, token in (((), b"PATCHED_OK"), (("--status",), b"STATUS CURRENT")):
+                    result = subprocess.run([sys.executable, str(script), str(target), *options],
+                                            check=False, capture_output=True, env=narrow)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue(result.stdout.startswith(token), result.stdout)
+                self.assertIn(b"copy: t\\xfc.py.bak-pre-", result.stdout)
+
     def test_embedded_pins_equal_the_pinned_source_gate(self):
         for script in (ROUTER, DEBOUNCE):
             with self.subTest(script=script.name):
